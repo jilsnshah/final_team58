@@ -1,0 +1,43 @@
+# Flask Web Framework
+flask==3.0.0
+flask-cors==4.0.0
+flask-socketio==5.3.5
+
+# WebSocket Support
+python-socketio==5.10.0
+eventlet==0.33.3
+
+# Environment Variables
+python-dotenv==1.0.0
+
+# Database
+psycopg2-binary==2.9.9
+
+# Data Processing & Analysis
+numpy==1.24.3
+pandas==2.0.3
+
+# Utilities
+requests==2.31.0
+python-dateutil==2.8.2
+
+# AI/LLM for Report Generation and Chatbot
+langchain
+langchain-core
+langchain-google-genai
+langchain-community
+google-generativeai
+langchain-huggingface
+
+# Vector Store and Embeddings for RAG
+faiss-cpu>=1.7.4
+sentence-transformers>=2.2.2
+
+# FastAPI Web Framework
+fastapi
+uvicorn
+
+# Data Science and Machine Learning
+joblib
+scikit-learn
+python-multipart

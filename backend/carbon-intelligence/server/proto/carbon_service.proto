@@ -1,0 +1,127 @@
+syntax = "proto3";
+
+package carbon;
+
+service CarbonService {
+    rpc GetProjects(ProjectQuery) returns (ProjectResponse);
+    rpc GetNews(NewsQuery) returns (NewsResponse);
+    rpc GetFinanceData(FinanceQuery) returns (FinanceResponse);
+    rpc GetProjectDetail(ProjectDetailQuery) returns (ProjectDetailResponse);
+    
+    // Non-streaming endpoints - direct SQL queries
+    rpc GetNonStreamingProjects(ProjectQuery) returns (ProjectResponse);
+    rpc GetNonStreamingNews(NewsQuery) returns (NewsResponse);
+    rpc GetNonStreamingFinanceData(FinanceQuery) returns (FinanceResponse);
+}
+
+message ProjectQuery {
+    string country = 1;
+}
+
+message ProjectItem {
+    string project_id = 1;
+    string project_name = 2;
+    string registry_status = 3;
+    string country = 4;
+    int32 vintage = 5;
+    double supply = 6;
+    string description = 7;
+    string methodology = 8;
+    double price = 9;
+    int32 available_credits = 10;
+    string category = 11;
+    string image_url = 12;
+    string buy_link = 13;
+    string project_summary = 14;
+}
+
+message Project {
+    string project_id = 1;
+    string project_name = 2;
+    string registry_status = 3;
+    string country = 4;
+    int32 vintage = 5;
+    double supply = 6;
+    string project_summary = 7;
+    string project_link = 8;
+    string description = 9;
+    string methodology = 10;
+    double price = 11;
+    int32 available_credits = 12;
+    string category = 13;
+    string image_url = 14;
+    string buy_link = 15;
+}
+
+message ProjectResponse {
+    repeated ProjectItem items = 1;
+}
+
+message NewsQuery {
+    string source = 1;
+}
+
+message NewsItem {
+    string guid = 1;
+    string title = 2;
+    string link = 3;
+    string published = 4;
+    string source = 5;
+    string summary = 6;
+    string id = 7;
+    string body = 8;
+    string author = 9;
+    string date = 10;
+    string sentiment = 11;
+    string image_url = 12;
+}
+
+message NewsResponse {
+    repeated NewsItem items = 1;
+}
+
+message FinanceQuery {
+    string ticker = 1;  // Optional: filter by ticker
+}
+
+message FinanceItem {
+    string ticker = 1;
+    double price = 2;
+    int64 volume = 3;
+    string market_cap = 4;
+    double change_percent = 5;
+    int64 timestamp = 6;
+    string company_name = 7;
+    string industry = 8;
+    string description = 9;
+    int32 gii_score = 10;
+    double stock_price = 11;
+    string sustainability_update = 12;
+    string esg_rating = 13;
+    string website = 14;
+}
+
+message FinanceResponse {
+    repeated FinanceItem items = 1;
+    int32 count = 2;
+}
+
+message ProjectDetailQuery {
+    string project_id = 1;
+}
+
+message ProjectDetail {
+    string project_id = 1;
+    string project_name = 2;
+    string registry_status = 3;
+    string country = 4;
+    int32 vintage = 5;
+    double supply = 6;
+    string project_summary = 7;
+    string project_link = 8;
+    string source = 9;  // "verra" or "carbonmark"
+}
+
+message ProjectDetailResponse {
+    ProjectDetail project = 1;
+}

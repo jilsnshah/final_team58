@@ -1,0 +1,19 @@
+{
+  "name": "postgres-connector",
+  "config": {
+    "connector.class": "io.debezium.connector.postgresql.PostgresConnector",
+    "database.hostname": "postgres",
+    "database.port": "5432",
+    "database.user": "carbon",
+    "database.password": "carbonpw",
+    "database.dbname": "carbon_intel",
+
+    "topic.prefix": "carbon",
+    "slot.name": "carbon_slot",
+    "plugin.name": "pgoutput",
+
+    "publication.autocreate.mode": "all_tables",
+    "schema.include.list": "public",
+    "table.include.list": "public.verra,public.carbonmark,public.finance,public.news"
+  }
+}

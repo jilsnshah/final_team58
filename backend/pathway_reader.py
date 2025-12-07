@@ -1,0 +1,298 @@
+"""
+Pathway Data Reader - Reads data from Pathway output files or directly from Postgres
+"""
+
+import json
+import os
+from datetime import datetime
+from typing import Dict, List, Any, Optional
+from collections import defaultdict
+import logging
+import psycopg2
+from psycopg2.extras import RealDictCursor
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+
+class PathwayDataReader:
+    """Reads and analyzes data from Pathway output files or Postgres database"""
+    
+    def __init__(self, pathway_output_dir: str = "./carbon-intelligence/server/output"):
+        self.output_dir = pathway_output_dir
+        self.projects_file = os.path.join(pathway_output_dir, "projects.jsonl")
+        self.finance_file = os.path.join(pathway_output_dir, "finance.jsonl")
+        self.news_file = os.path.join(pathway_output_dir, "news.jsonl")
+        
+        # Database connection for direct access
+        self.db_config = {
+            'host': os.getenv('DB_HOST', 'postgres'),
+            'port': os.getenv('DB_PORT', '5432'),
+            'dbname': os.getenv('DB_NAME', 'carbon_intel'),
+            'user': os.getenv('DB_USER', 'carbon'),
+            'password': os.getenv('DB_PASSWORD', 'carbonpw')
+        }
+        self.use_db = self._test_db_connection()
+        
+        # Cache with timestamps and file modification tracking
+        self._cache = {
+            'projects': {'data': [], 'timestamp': None, 'file_mtime': None},
+            'finance': {'data': [], 'timestamp': None, 'file_mtime': None},
+            'news': {'data': [], 'timestamp': None, 'file_mtime': None}
+        }
+        self._cache_ttl = 2  # Cache for 2 seconds minimum (to avoid thrashing)
+        
+        logger.info(f"✅ Pathway reader initialized: {pathway_output_dir}")
+        if self.use_db:
+            logger.info(f"✅ Direct database connection enabled: {self.db_config['host']}")
+    
+    def _test_db_connection(self) -> bool:
+        """Test if database connection is available"""
+        try:
+            conn = psycopg2.connect(**self.db_config)
+            conn.close()
+            return True
+        except Exception as e:
+            logger.warning(f"⚠️ Database connection failed: {e}, falling back to JSONL files")
+            return False
+    
+    def _get_db_connection(self):
+        """Get database connection"""
+        return psycopg2.connect(**self.db_config, cursor_factory=RealDictCursor)
+    
+    def _read_jsonl_file(self, filepath: str, max_records: int = None) -> List[Dict]:
+        """Read JSONL file and return list of active records"""
+        if not os.path.exists(filepath):
+            return []
+        
+        records = []
+        try:
+            with open(filepath, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+                if max_records:
+                    lines = lines[-max_records:]
+                
+                for line in lines:
+                    if line.strip():
+                        data = json.loads(line.strip())
+                        if data.get('diff', 1) == 1:
+                            records.append(data)
+        except Exception as e:
+            logger.error(f"Error reading {filepath}: {e}")
+        
+        return records
+    
+    def _file_changed(self, filepath: str, cache_key: str) -> bool:
+        """Check if file has been modified"""
+        if not os.path.exists(filepath):
+            return False
+        
+        try:
+            current_mtime = os.path.getmtime(filepath)
+            cached_mtime = self._cache[cache_key]['file_mtime']
+            
+            if cached_mtime is None:
+                self._cache[cache_key]['file_mtime'] = current_mtime
+                return True
+            
+            return current_mtime > cached_mtime
+        except Exception as e:
+            logger.error(f"Error checking file modification time: {e}")
+            return False
+    
+    def _should_refresh_cache(self, cache_key: str, filepath: str) -> bool:
+        """Check if cache should be refreshed based on file changes or TTL"""
+        # Always check if file changed
+        if self._file_changed(filepath, cache_key):
+            return True
+        
+        # Fall back to TTL check
+        if self._cache[cache_key]['timestamp'] is None:
+            return True
+        age = (datetime.now() - self._cache[cache_key]['timestamp']).total_seconds()
+        return age > self._cache_ttl
+    
+    def get_projects(self, country: Optional[str] = None, limit: int = 500) -> List[Dict]:
+        """Get carbon projects from Pathway output or database"""
+        # Try database first if available
+        if self.use_db:
+            try:
+                conn = self._get_db_connection()
+                cur = conn.cursor()
+                
+                query = "SELECT * FROM verra"
+                params = []
+                
+                if country:
+                    query += " WHERE country = %s"
+                    params.append(country)
+                
+                query += f" ORDER BY updated_at DESC LIMIT {limit}"
+                
+                cur.execute(query, params)
+                projects = [dict(row) for row in cur.fetchall()]
+                cur.close()
+                conn.close()
+                
+                logger.info(f"📊 Fetched {len(projects)} projects from database")
+                return projects
+            except Exception as e:
+                logger.error(f"Database error: {e}, falling back to JSONL")
+        
+        # Fallback to JSONL
+        if self._should_refresh_cache('projects', self.projects_file):
+            self._cache['projects']['data'] = self._read_jsonl_file(self.projects_file, max_records=5000)
+            self._cache['projects']['timestamp'] = datetime.now()
+        
+        projects = self._cache['projects']['data']
+        
+        if country:
+            projects = [p for p in projects if p.get('country') == country]
+        
+        return projects[:limit]
+    
+    def get_finance(self, ticker: Optional[str] = None) -> List[Dict]:
+        """Get finance data from database or Pathway output"""
+        # Try database first for complete data
+        if self.use_db:
+            try:
+                conn = self._get_db_connection()
+                cur = conn.cursor()
+                
+                if ticker:
+                    query = "SELECT * FROM finance WHERE ticker = %s"
+                    cur.execute(query, (ticker,))
+                else:
+                    query = "SELECT * FROM finance ORDER BY updated_at DESC"
+                    cur.execute(query)
+                
+                finance_data = [dict(row) for row in cur.fetchall()]
+                cur.close()
+                conn.close()
+                
+                logger.info(f"📊 Fetched {len(finance_data)} finance records from database")
+                return finance_data
+            except Exception as e:
+                logger.error(f"Database error: {e}, falling back to JSONL")
+        
+        # Fallback to JSONL
+        if self._should_refresh_cache('finance', self.finance_file):
+            self._cache['finance']['data'] = self._read_jsonl_file(self.finance_file)
+            self._cache['finance']['timestamp'] = datetime.now()
+        
+        finance_data = self._cache['finance']['data']
+        
+        if ticker:
+            finance_data = [f for f in finance_data if f.get('ticker') == ticker]
+        
+        return finance_data
+    
+    def get_news(self, source: Optional[str] = None, limit: int = 1000) -> List[Dict]:
+        """Get news from database or Pathway output"""
+        # Try database first for complete data
+        if self.use_db:
+            try:
+                conn = self._get_db_connection()
+                cur = conn.cursor()
+                
+                query = "SELECT * FROM news"
+                params = []
+                
+                if source:
+                    query += " WHERE source = %s"
+                    params.append(source)
+                
+                query += f" ORDER BY published DESC LIMIT {limit}"
+                
+                cur.execute(query, params)
+                news_data = [dict(row) for row in cur.fetchall()]
+                cur.close()
+                conn.close()
+                
+                logger.info(f"📊 Fetched {len(news_data)} news articles from database")
+                return news_data
+            except Exception as e:
+                logger.error(f"Database error: {e}, falling back to JSONL")
+        
+        # Fallback to JSONL
+        if self._should_refresh_cache('news', self.news_file):
+            self._cache['news']['data'] = self._read_jsonl_file(self.news_file, max_records=1000)
+            self._cache['news']['timestamp'] = datetime.now()
+        
+        news_data = self._cache['news']['data']
+        
+        if source:
+            news_data = [n for n in news_data if n.get('source') == source]
+        
+        return news_data[:limit]
+    
+    def get_analytics(self) -> Dict[str, Any]:
+        """Generate analytics from current data"""
+        projects = self.get_projects(limit=5000)
+        finance = self.get_finance()
+        news = self.get_news(limit=1000)
+        
+        total_supply = sum(p.get('available_credits', 0) for p in projects)
+        total_price_sum = sum(p.get('price', 0) for p in projects if p.get('price'))
+        avg_price = total_price_sum / len(projects) if projects else 0
+        
+        by_country = defaultdict(int)
+        for p in projects:
+            by_country[p.get('country', 'Unknown')] += 1
+        
+        by_category = defaultdict(int)
+        for p in projects:
+            by_category[p.get('category', 'Other')] += 1
+        
+        return {
+            'projects': {
+                'total': len(projects),
+                'total_supply': total_supply,
+                'avg_price': round(avg_price, 2),
+                'by_country': dict(by_country),
+                'by_category': dict(by_category),
+                'top_countries': sorted(by_country.items(), key=lambda x: x[1], reverse=True)[:10]
+            },
+            'finance': {
+                'total_tickers': len(finance),
+                'avg_change': sum(f.get('change_percent', 0) for f in finance) / len(finance) if finance else 0
+            },
+            'news': {
+                'total': len(news),
+                'by_sentiment': {
+                    'positive': len([n for n in news if n.get('sentiment') == 'Positive']),
+                    'negative': len([n for n in news if n.get('sentiment') == 'Negative']),
+                    'neutral': len([n for n in news if n.get('sentiment') == 'Neutral'])
+                }
+            },
+            'last_update': datetime.now().isoformat()
+        }
+    
+    def has_changes(self) -> bool:
+        """Check if any data files have been modified since last read"""
+        files_to_check = [
+            ('projects', self.projects_file),
+            ('finance', self.finance_file),
+            ('news', self.news_file)
+        ]
+        
+        for cache_key, filepath in files_to_check:
+            if self._file_changed(filepath, cache_key):
+                return True
+        
+        return False
+    
+    def search_projects(self, query: str, limit: int = 50) -> List[Dict]:
+        """Search projects by name, country, or category"""
+        projects = self.get_projects()
+        query_lower = query.lower()
+        
+        results = [
+            p for p in projects
+            if query_lower in p.get('project_name', '').lower()
+            or query_lower in p.get('country', '').lower()
+            or query_lower in p.get('category', '').lower()
+            or query_lower in p.get('description', '').lower()
+        ]
+        
+        return results[:limit]
