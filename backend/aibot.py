@@ -2,24 +2,46 @@
 AI Chatbot Service - LangChain Agent with Tool Calling
 
 A LangChain agent that can call tools to perform frontend actions using Google Gemini.
+Uses the modern create_agent API for production-ready agent implementation.
 """
 
 from flask import Blueprint, request, jsonify
 import logging
 import os
-from langchain.agents import AgentExecutor, create_tool_calling_agent
+from langchain.agents import create_agent
+from langchain.agents.middleware import before_agent
 from langchain.tools import tool
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langgraph.checkpoint.memory import MemorySaver
+from langchain_core.messages import AIMessage, HumanMessage
 import frontend_actions
+from llm_manager import get_llm
 
-# Import News RAG service
+# Import RAG and Service modules
 try:
-    from services.news_rag_service import get_news_rag_service, search_news
+    from services.news_rag_service import search_news
+    from services.projects_rag_service import search_projects
     NEWS_RAG_AVAILABLE = True
+    PROJECTS_RAG_AVAILABLE = True
 except ImportError:
     NEWS_RAG_AVAILABLE = False
-    print("⚠️ News RAG service not available")
+    PROJECTS_RAG_AVAILABLE = False
+    print("⚠️ RAG services not available")
+
+# References to services (set by app.py)
+_company_service = None
+_project_service = None
+
+def set_company_service(service):
+    """Set the company service reference from app.py"""
+    global _company_service
+    _company_service = service
+    logger.info("✅ Company service connected to aibot")
+
+def set_project_service(service):
+    """Set the project service reference from app.py"""
+    global _project_service
+    _project_service = service
+    logger.info("✅ Project service connected to aibot")
 
 # Set Google API Key
 os.environ["GOOGLE_API_KEY"] = os.getenv("GOOGLE_API_KEY", "")  # Use env variable or empty if not set
@@ -227,122 +249,322 @@ def go_to_projects() -> str:
     return "Navigating to projects page!" if success else "Failed to navigate to projects."
 
 @tool
-def search_carbon_news(query: str) -> str:
-    """Search for the latest carbon credit, ESG, and sustainability news articles.
-    
-    Use this tool when users ask about:
-    - Recent news about carbon credits, ESG, or sustainability
-    - What's happening in the carbon market
-    - Latest developments in green investing
-    - News about specific companies' ESG initiatives
-    - Climate policy updates
+def search_carbon_news(query: str, k: int = 5) -> str:
+    """Search carbon/ESG news articles using RAG. Returns relevant news about sustainability, carbon markets, ESG trends.
     
     Args:
-        query: The search query (e.g., 'carbon credit trends', 'Tesla ESG news', 'EU carbon market')
+        query: Search query (e.g., 'carbon credit trends', 'Tesla ESG news')
+        k: Number of results (default 5)
     
     Returns:
-        Relevant news summaries with sources
+        Relevant news with titles, sources, links, and content
     """
     if not NEWS_RAG_AVAILABLE:
-        return "News search is currently unavailable. The RAG service is not initialized."
+        return "News RAG is unavailable."
     
     try:
-        results = search_news(query, k=5)
+        results = search_news(query, k=k)
+        if not results:
+            return "No news articles found."
         
-        if not results.get('found') or not results.get('sources'):
-            return f"I couldn't find any recent news about '{query}'. Try a different search term."
-        
-        # Format the response
-        response_parts = [f"Here's what I found about '{query}':\n"]
-        
-        for i, source in enumerate(results['sources'][:5], 1):
-            title = source.get('title', 'Untitled')
-            news_source = source.get('source', 'Unknown')
-            published = source.get('published', '')
-            sentiment = source.get('sentiment', 'Neutral')
-            
-            # Format date if available
-            date_str = published[:16] if published else 'Recent'
-            
-            response_parts.append(f"{i}. **{title}**")
-            response_parts.append(f"   Source: {news_source} | {date_str} | Sentiment: {sentiment}\n")
-        
-        # Add context summary
-        if results.get('context'):
-            context = results['context'][:800]  # Limit context length
-            response_parts.append(f"\n📝 Summary:\n{context}")
-        
-        return "\n".join(response_parts)
-        
+        output = []
+        for i, chunk in enumerate(results, 1):
+            output.append(f"\n--- News {i} ---")
+            output.append(f"Title: {chunk['title']}")
+            output.append(f"Source: {chunk['source']}")
+            output.append(f"Link: {chunk['link']}")
+            output.append(f"Published: {chunk['published']}")
+            output.append(f"Content: {chunk['content'][:300]}...")
+        return "\n".join(output)
     except Exception as e:
         logger.error(f"Error searching news: {e}")
-        return f"Error searching news: {str(e)}"
+        return f"Error: {str(e)}"
+
+@tool
+def search_carbon_projects(query: str, k: int = 5) -> str:
+    """Search carbon credit projects using RAG. Returns projects about renewable energy, REDD+, carbon offsets.
+    
+    Args:
+        query: Search query (e.g., 'wind energy projects', 'REDD+ Brazil')
+        k: Number of results (default 5)
+    
+    Returns:
+        Relevant projects with names, registries, countries, types
+    """
+    if not PROJECTS_RAG_AVAILABLE:
+        return "Projects RAG is unavailable."
+    
+    try:
+        results = search_projects(query, k=k)
+        if not results:
+            return "No projects found."
+        
+        output = []
+        for i, chunk in enumerate(results, 1):
+            output.append(f"\n--- Project {i} ---")
+            output.append(f"Name: {chunk['name']}")
+            output.append(f"Registry: {chunk['registry']}")
+            output.append(f"Country: {chunk['country']}")
+            output.append(f"Type: {chunk['type']}")
+            output.append(f"Link: {chunk['registry_link']}")
+            output.append(f"Content: {chunk['content'][:300]}...")
+        return "\n".join(output)
+    except Exception as e:
+        logger.error(f"Error searching projects: {e}")
+        return f"Error: {str(e)}"
+
+@tool
+def get_detailed_company_info(ticker: str) -> str:
+    """Get comprehensive company details including stock price, ESG rating, GII score, industry, description.
+    
+    Args:
+        ticker: Company ticker (e.g., 'TSLA', 'AAPL')
+    
+    Returns:
+        Detailed company information
+    """
+    if not _company_service:
+        return "Company service unavailable."
+    
+    try:
+        result = _company_service.get_company_details(ticker)
+        if not result.get('success'):
+            return f"Company {ticker} not found."
+        
+        comp = result['data']
+        info = f"""
+Company: {comp.get('name', '')}
+Ticker: {comp.get('ticker', '')}
+Industry: {comp.get('industry', '')}
+Stock Price: ${comp.get('stock_price', 0)}
+Market Cap: {comp.get('market_cap', 'N/A')}
+ESG Rating: {comp.get('esg_rating', 'N/A')}
+Green Innovation Index: {comp.get('gii_score', 0)}/100
+Description: {comp.get('description', '')}
+Website: {comp.get('website', '')}
+"""
+        return info.strip()
+    except Exception as e:
+        return f"Error: {str(e)}"
+
+@tool
+def get_company_insights(ticker: str) -> str:
+    """Get AI-powered insights about a company's sustainability, ESG performance, and market position.
+    
+    Args:
+        ticker: Company ticker (e.g., 'TSLA', 'AAPL')
+    
+    Returns:
+        AI-generated insights and analysis
+    """
+    if not _company_service:
+        return "Company service unavailable."
+    
+    try:
+        result = _company_service.get_company_insights(ticker)
+        if not result.get('success'):
+            return f"Insights for {ticker} unavailable."
+        
+        data = result['data']
+        insights = data.get('insights', 'No insights available')
+        return f"Insights for {data.get('company_name')}:\n{insights}"
+    except Exception as e:
+        return f"Error: {str(e)}"
+
+@tool
+def get_company_future_impact(ticker: str) -> str:
+    """Get comprehensive future impact analysis using AI agent with news, projects, and internet search.
+    
+    Args:
+        ticker: Company ticker (e.g., 'TSLA', 'AAPL')
+    
+    Returns:
+        Detailed future impact analysis
+    """
+    if not _company_service:
+        return "Company service unavailable."
+    
+    try:
+        result = _company_service.get_future_impact_analysis(ticker)
+        if not result.get('success'):
+            return f"Future impact analysis for {ticker} unavailable."
+        
+        data = result['data']
+        analysis = data.get('analysis', 'No analysis available')
+        return f"Future Impact for {data.get('company_name')}:\n{analysis}"
+    except Exception as e:
+        return f"Error: {str(e)}"
+
+@tool
+def get_project_details(project_id: str) -> str:
+    """Get carbon project details including name, country, methodology, credits, price.
+    
+    Args:
+        project_id: Project ID
+    
+    Returns:
+        Project details
+    """
+    if not _project_service:
+        return "Project service unavailable."
+    
+    try:
+        result = _project_service.get_project_details(project_id)
+        if not result.get('success'):
+            return f"Project {project_id} not found."
+        
+        proj = result['data']
+        info = f"""
+Project: {proj.get('name', '')}
+Country: {proj.get('country', 'N/A')}
+Category: {proj.get('category', 'N/A')}
+Methodology: {proj.get('methodology', 'N/A')}
+Available Credits: {proj.get('available_credits', 0)}
+Price: ${proj.get('price', 0)}
+Status: {proj.get('registry_status', 'N/A')}
+Description: {proj.get('description', 'N/A')}
+"""
+        return info.strip()
+    except Exception as e:
+        return f"Error: {str(e)}"
+
+@tool
+def get_project_report(project_id: str) -> str:
+    """Get AI-generated comprehensive report for a carbon project.
+    
+    Args:
+        project_id: Project ID
+    
+    Returns:
+        AI-generated project report
+    """
+    if not _project_service:
+        return "Project service unavailable."
+    
+    try:
+        result = _project_service.generate_project_report(project_id)
+        if not result.get('success'):
+            return f"Report for project {project_id} unavailable."
+        
+        data = result['data']
+        report = data.get('report', 'No report available')
+        return f"Project Report for {data.get('project_name')}:\n{report}"
+    except Exception as e:
+        return f"Error: {str(e)}"
 
 # List of all tools
-tools = [change_theme, get_company_info, list_available_companies, add_to_watchlist, remove_from_watchlist, go_to_company, go_to_projects, search_carbon_news]
+tools = [
+    # Navigation & UI
+    change_theme, 
+    go_to_company, 
+    go_to_projects,
+    # Watchlist
+    add_to_watchlist, 
+    remove_from_watchlist,
+    # Basic Info
+    list_available_companies,
+    get_company_info,
+    # Advanced Company Analysis
+    get_detailed_company_info,
+    get_company_insights,
+    get_company_future_impact,
+    # Project Tools
+    get_project_details,
+    get_project_report,
+    # RAG Search
+    search_carbon_news,
+    search_carbon_projects
+]
 
 # ============================================================================
-# INITIALIZE LLM AND AGENT
+# INITIALIZE AGENT
 # ============================================================================
 
 agent = None
 
 # System prompt for the agent
-SYSTEM_PROMPT = """You are EcoInvest AI, a friendly and knowledgeable assistant for EcoInvest - a Carbon Intelligence & ESG Investment Platform.
+SYSTEM_PROMPT = """You are EcoInvest AI, a comprehensive assistant guiding users through EcoInvest - a Carbon Intelligence & ESG Investment Platform.
 
-🌱 ABOUT THE PLATFORM:
-EcoInvest helps users track sustainable investments, monitor ESG (Environmental, Social, Governance) ratings, and explore carbon credit projects. You're here to help users navigate the platform and answer questions about companies and sustainability.
+🌱 YOUR ROLE:
+You're an expert guide helping users navigate sustainability investments, ESG analysis, carbon markets, and green projects. You have access to powerful tools for deep research and analysis.
 
-🛠️ YOUR CAPABILITIES:
-1. **Company Information** - Use get_company_info to answer questions about any company's stock price, ESG rating, sustainability initiatives, GII score, and more.
-2. **List Companies** - Use list_available_companies to show what companies are in the database.
-3. **News Search** - Use search_carbon_news to find the latest news about carbon credits, ESG, sustainability, and green investing. Always use this for news-related questions!
-4. **Watchlist Management** - Add or remove companies from the user's watchlist.
-5. **Navigation** - Help users navigate to company pages or the carbon projects page.
-6. **Theme Toggle** - Switch between light and dark mode.
+🛠️ YOUR COMPREHENSIVE CAPABILITIES:
 
-💬 HOW TO RESPOND:
-- Be warm, helpful, and conversational - like a knowledgeable friend!
-- When asked about a company, USE the get_company_info tool first, then summarize the key info naturally.
-- When asked about news, trends, or recent developments, USE the search_carbon_news tool to get real information.
-- Keep responses concise but informative.
-- Use emojis sparingly to be friendly (1-2 per message max).
-- If users ask about ESG, sustainability, or carbon credits, explain in simple terms.
+**Company Analysis (Multiple Levels):**
+- get_company_info / get_detailed_company_info - Basic stock, ESG, GII data
+- get_company_insights - AI-powered sustainability insights
+- get_company_future_impact - Comprehensive future impact analysis using multi-tool AI agent
+- list_available_companies - See all companies in database
 
-🚫 NEVER DO:
-- Show raw JSON, technical data, or tool outputs directly.
-- Be robotic or overly formal.
-- Make up information - if you don't have data, say so politely.
+**Carbon Projects:**
+- get_project_details - Project info (country, methodology, credits, price)
+- get_project_report - AI-generated comprehensive project reports
 
-✨ EXAMPLE RESPONSES:
-- "Tesla's doing great! Stock is at $248.50 with an A+ ESG rating. They're really leading in sustainability. Want me to add them to your watchlist?"
-- "Done! I've switched to dark mode for you. 🌙"
-- "Here are the companies I can tell you about: [list]. Which one interests you?"
+**RAG-Powered Search (Real Data):**
+- search_carbon_news - Search latest ESG/carbon/sustainability news articles with sources
+- search_carbon_projects - Search carbon offset projects (renewable energy, REDD+, etc.)
 
-Remember: You're the friendly guide to sustainable investing!"""
+**Platform Navigation:**
+- go_to_company - Navigate to company detail pages
+- go_to_projects - Go to carbon projects page
+- change_theme - Toggle light/dark mode
+
+**Watchlist:**
+- add_to_watchlist / remove_from_watchlist - Manage user's company watchlist
+
+💡 HOW TO ASSIST:
+- **Be proactive** - Guide users through the platform and suggest relevant tools
+- **Use tools intelligently** - For company questions, start with basic info, then use insights/future impact for deeper analysis
+- **Search first** - When asked about news/trends/projects, USE search_carbon_news and search_carbon_projects
+- **Be conversational** - Friendly, helpful tone. Explain ESG/carbon concepts simply
+- **Provide context** - Don't just dump tool output - interpret and summarize key points
+- **Offer next steps** - Suggest relevant actions ("Want me to add them to your watchlist?" or "Should I pull up their future impact analysis?")
+
+🎯 RESPONSE GUIDELINES:
+- Keep responses clear and concise (2-4 paragraphs for complex topics)
+- Use tools to get real data - don't make things up
+- When using RAG tools, summarize the key findings naturally
+- Explain technical terms (ESG, GII, carbon credits, REDD+) when needed
+- Minimal emojis (1-2 max per response)
+
+🚫 AVOID:
+- Raw JSON or unformatted tool outputs
+- Overly technical jargon without explanation
+- Making up data when tools don't return results
+- Being robotic or formal
+
+You're the comprehensive guide to sustainable investing - help users discover, analyze, and understand green investments!"""
 
 try:
-    # Initialize LLM with Google Gemini
-    # Using gemini-2.5-flash for better reasoning and tool calling
-    llm = ChatGoogleGenerativeAI(
-        model="models/gemini-2.5-flash",
-        temperature=0.7,
-        max_output_tokens=1024,
+    # Get shared LLM instance from centralized manager
+    model = get_llm()
+    
+    if not model:
+        logger.error("❌ LLM not available - agent cannot be created")
+        raise Exception("LLM initialization failed")
+    
+    # Message limit middleware - trim to most recent 10 messages
+    @before_agent
+    def message_limit_middleware(state, config):
+        messages = state.get("messages", [])
+        # Keep only the most recent 10 messages
+        if len(messages) > 10:
+            state["messages"] = messages[-10:]
+            logger.info(f"🔄 Trimmed conversation to 10 most recent messages")
+        return state
+    
+    # Create agent using modern create_agent API with memory support
+    # MemorySaver provides conversation persistence across requests
+    # This provides a production-ready agent implementation with ReAct loop
+    agent = create_agent(
+        model=model,
+        tools=tools,
+        system_prompt=SYSTEM_PROMPT,
+        checkpointer=MemorySaver(),
+        middleware=[message_limit_middleware]
     )
     
-    # Create prompt template for the agent
-    prompt = ChatPromptTemplate.from_messages([
-        ("system", SYSTEM_PROMPT),
-        MessagesPlaceholder(variable_name="chat_history", optional=True),
-        ("human", "{input}"),
-        MessagesPlaceholder(variable_name="agent_scratchpad"),
-    ])
-    
-    # Create agent using the LangChain API
-    agent_runnable = create_tool_calling_agent(llm, tools, prompt)
-    agent = AgentExecutor(agent=agent_runnable, tools=tools, verbose=True)
-    
-    logger.info("✅ AI Chat agent initialized successfully (Gemini Pro)")
+    logger.info("✅ AI Chat agent initialized with 10-message limit and comprehensive tools (Gemini 2.5 Flash)")
 except Exception as e:
     logger.error(f"❌ Failed to initialize AI chat agent: {e}")
     import traceback
@@ -372,33 +594,39 @@ def chat():
                 'response': "Sorry, the AI service is currently unavailable. Please check the Gemini API configuration."
             }), 503
         
-        # Get or create chat history
+        # Invoke the agent using the modern API with memory support
+        # The checkpointer automatically handles conversation history per thread_id
+        # The agent follows the ReAct pattern and uses tools as needed
+        result = agent.invoke(
+            {"messages": [{"role": "user", "content": user_message}]},
+            {"configurable": {"thread_id": session_id}}
+        )
+        
+        # Extract the final response from the agent's message sequence
+        # The last message in the result should be the agent's final response
+        final_messages = result.get("messages", [])
+        if final_messages:
+            # Get the last message content
+            last_message = final_messages[-1]
+            if hasattr(last_message, 'content'):
+                bot_response = last_message.content
+            elif isinstance(last_message, dict):
+                bot_response = last_message.get('content', "I've processed your request.")
+            else:
+                bot_response = str(last_message)
+        else:
+            bot_response = "I've processed your request."
+        
+        # Keep chat history for client-side display (memory is handled by checkpointer)
         if session_id not in chat_histories:
             chat_histories[session_id] = []
         
-        chat_history = chat_histories[session_id]
+        chat_histories[session_id].append({"role": "user", "content": user_message})
+        chat_histories[session_id].append({"role": "assistant", "content": bot_response})
         
-        # Build chat history for the agent
-        history_messages = []
-        for msg in chat_history[-6:]:  # Last 3 exchanges
-            history_messages.append((msg["role"], msg["content"]))
-        
-        # Invoke the agent with the new format
-        result = agent.invoke({
-            "input": user_message,
-            "chat_history": history_messages
-        })
-        
-        # Get the response from the result
-        bot_response = result.get("output", "I've processed your request.")
-        
-        # Update chat history
-        chat_history.append({"role": "user", "content": user_message})
-        chat_history.append({"role": "assistant", "content": bot_response})
-        
-        # Keep last 10 messages (5 exchanges)
-        if len(chat_history) > 10:
-            chat_histories[session_id] = chat_history[-10:]
+        # Keep last 20 messages (10 exchanges) for display purposes
+        if len(chat_histories[session_id]) > 20:
+            chat_histories[session_id] = chat_histories[session_id][-20:]
         
         logger.info(f"🤖 Responding: {bot_response}")
         

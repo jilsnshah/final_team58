@@ -97,31 +97,3 @@ class LiveNewsService:
         except Exception as e:
             logger.error(f"Error filtering news by sentiment: {e}")
             return {'success': False, 'error': str(e), 'data': []}
-    
-    def get_trending_topics(self) -> Dict[str, Any]:
-        """
-        Get trending topics from recent news
-        
-        Returns:
-            Dict with topic keywords and counts
-        """
-        try:
-            news_data = self.pathway_reader.get_news(limit=100)
-            
-            # Extract keywords from titles (simple implementation)
-            keywords = {}
-            for article in news_data:
-                title = article.get('title', '').lower()
-                for word in ['carbon', 'climate', 'renewable', 'emissions', 'green', 'sustainability']:
-                    if word in title:
-                        keywords[word] = keywords.get(word, 0) + 1
-            
-            trending = sorted(keywords.items(), key=lambda x: x[1], reverse=True)[:5]
-            
-            return {
-                'success': True,
-                'trending_topics': [{'keyword': k, 'count': v} for k, v in trending]
-            }
-        except Exception as e:
-            logger.error(f"Error getting trending topics: {e}")
-            return {'success': False, 'error': str(e), 'trending_topics': []}

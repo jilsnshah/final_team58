@@ -4,8 +4,8 @@
 
 import io from "socket.io-client";
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:5001";
-const WS_URL = import.meta.env.VITE_WS_URL || "http://localhost:5001";
+const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:5000";
+const WS_URL = import.meta.env.VITE_WS_URL || "http://localhost:5000";
 
 // WebSocket client singleton
 let socket = null;
@@ -172,19 +172,22 @@ export const getProjectById = async (id) => {
   return apiFetch(`/api/project/${id}`);
 };
 
+export const getProjectReport = async (id) => {
+  return apiFetch(`/api/project/${id}/report`);
+};
+
+export const askProjectQuestion = async (id, query) => {
+  return apiFetch(`/api/project/${id}/custom-query`, {
+    method: "POST",
+    body: JSON.stringify({ query }),
+  });
+};
+
 export const searchProjects = async (query, limit = 50) => {
   return apiFetch("/api/projects/search", {
     method: "POST",
     body: JSON.stringify({ query, limit }),
   });
-};
-
-export const getCountries = async () => {
-  return apiFetch("/api/countries");
-};
-
-export const getCategories = async () => {
-  return apiFetch("/api/categories");
 };
 
 // ============================================================================
@@ -218,18 +221,24 @@ export const getCompanyById = async (ticker) => {
   return result;
 };
 
-export const getCompanyCharts = async (ticker) => {
-  const result = await apiFetch(`/api/company/${ticker}/charts`);
-  return result;
-};
-
 export const getCompanyInsights = async (ticker) => {
   const result = await apiFetch(`/api/company/${ticker}/insights`);
   return result;
 };
 
-export const getESGMilestones = async (ticker) => {
-  const result = await apiFetch(`/api/company/${ticker}/esg-milestones`);
+export const getFutureImpactAnalysis = async (ticker) => {
+  const result = await apiFetch(`/api/company/${ticker}/future-impact`);
+  return result;
+};
+
+export const askCompanyQuestion = async (ticker, query) => {
+  const result = await apiFetch(`/api/company/${ticker}/custom-query`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ query }),
+  });
   return result;
 };
 
@@ -401,18 +410,18 @@ export default {
   // Projects
   getProjects,
   getProjectById,
+  getProjectReport,
+  askProjectQuestion,
   searchProjects,
-  getCountries,
-  getCategories,
 
   // Finance & ESG
   getFinance,
   getFinanceByTicker,
   getCompanies,
   getCompanyById,
-  getCompanyCharts,
   getCompanyInsights,
-  getESGMilestones,
+  getFutureImpactAnalysis,
+  askCompanyQuestion,
   getFinanceTickers,
   analyzeESG,
   searchCompanies,

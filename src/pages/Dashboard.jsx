@@ -1,6 +1,6 @@
 import React from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { TrendingUp, Plus, ExternalLink, Trash2, X } from "lucide-react";
+import { Plus, ExternalLink, Trash2, X } from "lucide-react";
 import DashboardChatSidebar from "../components/DashboardChatSidebar";
 import { ThemeContext } from "../App";
 import Fuse from "fuse.js";
@@ -372,29 +372,6 @@ const Dashboard = () => {
       console.error("❌ Failed to call backend remove from watchlist:", error);
       // Already removed optimistically, so it's fine
     }
-  };
-
-  // Simple sparkline component
-  const Sparkline = ({ trend }) => {
-    const points =
-      trend === "up"
-        ? [30, 25, 28, 22, 26, 20, 15, 18, 12, 10]
-        : [10, 12, 15, 18, 16, 20, 22, 25, 28, 30];
-
-    const max = Math.max(...points);
-    const normalized = points.map((p) => (p / max) * 30);
-    const pathData = normalized.map((y, i) => `${i * 10},${30 - y}`).join(" ");
-
-    return (
-      <svg className="w-20 h-8" viewBox="0 0 100 30">
-        <polyline
-          points={pathData}
-          fill="none"
-          stroke={trend === "up" ? "#22c55e" : "#ef4444"}
-          strokeWidth="2"
-        />
-      </svg>
-    );
   };
 
   const getSentimentColor = (sentiment) => {
@@ -893,38 +870,6 @@ const Dashboard = () => {
                                   {company.esg_rating}
                                 </span>
                               </div>
-                            </div>
-                          </div>
-
-                          <div
-                            className={`flex items-center justify-between pt-3 border-t ${
-                              theme === "dark"
-                                ? "border-slate-700/50"
-                                : "border-gray-200"
-                            } group-hover:border-green-500/40 transition-colors duration-300 relative z-10`}
-                          >
-                            <div className="flex items-center space-x-2">
-                              <TrendingUp
-                                className={`w-4 h-4 ${
-                                  theme === "dark"
-                                    ? "text-green-400"
-                                    : "text-green-600"
-                                } group-hover:scale-110 transition-transform duration-300`}
-                              />
-                              <span
-                                className={`text-xs ${
-                                  theme === "dark"
-                                    ? "text-slate-400"
-                                    : "text-slate-600"
-                                } transition-colors duration-300 font-medium`}
-                              >
-                                Performance Trend
-                              </span>
-                            </div>
-                            <div className="transform group-hover:scale-110 transition-transform duration-300">
-                              <Sparkline
-                                trend={company.gii_score > 85 ? "up" : "down"}
-                              />
                             </div>
                           </div>
 

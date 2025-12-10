@@ -1,150 +1,131 @@
 """
-Projects RAG Service - Vector Store and Retrieval for Carbon Projects
+Projects RAG Service - Vector Store and Retrieval Augmented Generation
 
-This service:
-1. Monitors projects.jsonl for changes
-2. Generates embeddings using sentence-transformers
-3. Stores embeddings in FAISS vector store
-4. Provides RAG-based question answering on projects content
+Main Function:
+- search_projects(query, k) -> Returns top-k RAG-matched chunks
+
+Features:
+- Incremental updates (only adds new projects, doesn't rebuild from scratch)
+- Monitors projects.jsonl for changes
+- Uses FAISS vector store with HuggingFace embeddings
 """
 
 import os
 import json
 import logging
-import hashlib
 import threading
 import time
 from pathlib import Path
-from typing import List, Dict, Optional, Tuple
-from datetime import datetime
+from typing import List, Dict, Optional
 
 # Vector store and embeddings
 LANGCHAIN_AVAILABLE = False
-FAISS = None
-HuggingFaceEmbeddings = None
-RecursiveCharacterTextSplitter = None
-Document = None
 
 try:
-    # Try langchain-community first
-    from langchain_community.vectorstores import FAISS as _FAISS
-    from langchain_community.embeddings import HuggingFaceEmbeddings as _HuggingFaceEmbeddings
-    FAISS = _FAISS
-    HuggingFaceEmbeddings = _HuggingFaceEmbeddings
-except ImportError:
-    pass
-
-try:
-    # Try langchain_core for Document
-    from langchain_core.documents import Document as _Document
-    Document = _Document
-except ImportError:
-    try:
-        from langchain.schema import Document as _Document
-        Document = _Document
-    except ImportError:
-        pass
-
-try:
-    from langchain_text_splitters import RecursiveCharacterTextSplitter as _RecursiveCharacterTextSplitter
-    RecursiveCharacterTextSplitter = _RecursiveCharacterTextSplitter
-except ImportError:
-    try:
-        from langchain.text_splitter import RecursiveCharacterTextSplitter as _RecursiveCharacterTextSplitter
-        RecursiveCharacterTextSplitter = _RecursiveCharacterTextSplitter
-    except ImportError:
-        pass
-
-# Check if all required components are available
-if FAISS is not None and HuggingFaceEmbeddings is not None and Document is not None and RecursiveCharacterTextSplitter is not None:
+    from langchain_community.document_loaders import JSONLoader
+    from langchain_text_splitters import RecursiveCharacterTextSplitter
+    from langchain_community.embeddings import HuggingFaceEmbeddings
+    from langchain_community.vectorstores import FAISS
+    from langchain_core.documents import Document
     LANGCHAIN_AVAILABLE = True
-else:
-    print("⚠️ LangChain community packages not available. Install with: pip install langchain-community faiss-cpu sentence-transformers")
+except ImportError:
+    print("⚠️ LangChain packages not available. Install with: pip install langchain-community faiss-cpu sentence-transformers")
 
 logger = logging.getLogger(__name__)
 
 # Paths
 PROJECTS_JSONL_PATH = Path(__file__).parent.parent / "carbon-intelligence" / "server" / "output" / "projects.jsonl"
 VECTOR_STORE_PATH = Path(__file__).parent.parent / "carbon-intelligence" / "server" / "output" / "projects_vector_store"
-HASH_FILE_PATH = VECTOR_STORE_PATH / "projects_hash.txt"
+INDEXED_IDS_FILE = VECTOR_STORE_PATH / "indexed_ids.json"
 
 
 class ProjectsRAGService:
     """
     RAG service for carbon credit projects.
-    Maintains a FAISS vector store that syncs with projects.jsonl.
+    Main function: search_projects(query, k) -> returns top-k chunks
     """
     
     def __init__(self, projects_path: str = None, vector_store_path: str = None):
         """Initialize the RAG service."""
+        print("\n" + "=" * 70)
+        print("🚀 INITIALIZING PROJECTS RAG SERVICE")
+        print("=" * 70)
+        
         self.projects_path = Path(projects_path) if projects_path else PROJECTS_JSONL_PATH
         self.vector_store_path = Path(vector_store_path) if vector_store_path else VECTOR_STORE_PATH
-        self.hash_file_path = self.vector_store_path / "projects_hash.txt"
+        self.indexed_ids_file = self.vector_store_path / "indexed_ids.json"
         
         self.vector_store: Optional[FAISS] = None
         self.embeddings = None
         self.text_splitter = None
-        self._initialized = False
         self._lock = threading.Lock()
         self._watch_thread = None
         self._stop_watching = False
-        
-        # Store projects data for direct queries
-        self._projects_data: List[Dict] = []
+        self.indexed_ids = set()
         
         if not LANGCHAIN_AVAILABLE:
             logger.error("❌ LangChain packages not available")
             return
         
-        # Initialize embeddings model (using a small, fast model)
-        logger.info("🚀 Loading embedding model for projects...")
-        try:
-            from langchain_huggingface import HuggingFaceEmbeddings
-            self.embeddings = HuggingFaceEmbeddings(
-                model_name="sentence-transformers/all-MiniLM-L6-v2",
-                model_kwargs={'device': 'cpu'},
-                encode_kwargs={'normalize_embeddings': True}
-            )
-            logger.info("✅ Embedding model loaded for projects")
-        except Exception as e:
-            logger.error(f"❌ Failed to load embedding model: {e}")
-            return
+        # Initialize embeddings model
+        print("📥 Loading HuggingFace embedding model...")
+        logger.info("🚀 Loading embedding model...")
+        self.embeddings = HuggingFaceEmbeddings(
+            model_name="sentence-transformers/all-MiniLM-L6-v2",
+            model_kwargs={'device': 'cpu'},
+            encode_kwargs={'normalize_embeddings': True}
+        )
+        print("   ✓ Embedding model loaded: sentence-transformers/all-MiniLM-L6-v2")
+        logger.info("✅ Embedding model loaded")
         
-        # Text splitter for chunking project descriptions
+        # Text splitter for chunking
+        print("✂️  Configuring text splitter (chunk_size=1000, overlap=200)")
         self.text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=500,
-            chunk_overlap=50,
-            length_function=len,
-            separators=["\n\n", "\n", ". ", " ", ""]
+            chunk_size=1000,
+            chunk_overlap=200
         )
         
-        # Initialize or load vector store
-        self._initialize_vector_store()
-    
-    def _compute_file_hash(self) -> str:
-        """Compute MD5 hash of projects.jsonl file."""
-        if not self.projects_path.exists():
-            return ""
+        # Load indexed IDs and initialize vector store
+        print("📋 Loading indexed project IDs...")
+        self._load_indexed_ids()
         
-        hash_md5 = hashlib.md5()
-        with open(self.projects_path, "rb") as f:
-            for chunk in iter(lambda: f.read(4096), b""):
-                hash_md5.update(chunk)
-        return hash_md5.hexdigest()
+        print("🔍 Checking for existing vector store...")
+        self._initialize_vector_store()
+        print("=" * 70 + "\n")
     
-    def _get_stored_hash(self) -> str:
-        """Get the stored hash from previous indexing."""
-        if self.hash_file_path.exists():
-            return self.hash_file_path.read_text().strip()
-        return ""
+    # ============================================================================
+    # HELPER FUNCTIONS
+    # ============================================================================
     
-    def _save_hash(self, hash_value: str):
-        """Save the current hash."""
+    def _load_indexed_ids(self):
+        """Load the set of already indexed project IDs."""
+        if self.indexed_ids_file.exists():
+            try:
+                with open(self.indexed_ids_file, 'r') as f:
+                    data = json.load(f)
+                    self.indexed_ids = set(data.get('indexed_ids', []))
+                logger.info(f"📋 Loaded {len(self.indexed_ids)} indexed project IDs")
+            except Exception as e:
+                logger.warning(f"⚠️ Could not load indexed IDs: {e}")
+                self.indexed_ids = set()
+    
+    def _save_indexed_ids(self):
+        """Save the set of indexed project IDs."""
         self.vector_store_path.mkdir(parents=True, exist_ok=True)
-        self.hash_file_path.write_text(hash_value)
+        with open(self.indexed_ids_file, 'w') as f:
+            json.dump({'indexed_ids': list(self.indexed_ids)}, f)
     
-    def _load_projects(self) -> List[Dict]:
-        """Load projects from JSONL file."""
+    def _get_project_id(self, project: Dict) -> str:
+        """Generate unique ID for a project."""
+        project_id = project.get('id', '')
+        name = project.get('name', '')
+        registry = project.get('registry', '')
+        unique_str = f"{project_id}|{name}|{registry}"
+        import hashlib
+        return hashlib.md5(unique_str.encode()).hexdigest()
+    
+    def _load_all_projects(self) -> List[Dict]:
+        """Load all projects from JSONL file."""
         projects = []
         if not self.projects_path.exists():
             logger.warning(f"⚠️ Projects file not found: {self.projects_path}")
@@ -153,74 +134,71 @@ class ProjectsRAGService:
         with open(self.projects_path, 'r', encoding='utf-8') as f:
             for line in f:
                 try:
-                    project = json.loads(line.strip())
-                    projects.append(project)
+                    projects.append(json.loads(line.strip()))
                 except json.JSONDecodeError:
                     continue
         
-        self._projects_data = projects
-        logger.info(f"🌱 Loaded {len(projects)} carbon projects")
         return projects
+    
+    def _get_new_projects(self) -> List[Dict]:
+        """Get only new projects that haven't been indexed yet."""
+        all_projects = self._load_all_projects()
+        new_projects = []
+        
+        for project in all_projects:
+            project_id = self._get_project_id(project)
+            if project_id not in self.indexed_ids:
+                new_projects.append(project)
+        
+        if new_projects:
+            logger.info(f"🆕 Found {len(new_projects)} new projects to index")
+        return new_projects
     
     def _create_documents(self, projects: List[Dict]) -> List[Document]:
         """Convert projects to LangChain Documents with chunking."""
         documents = []
         
-        total_projects = len(projects)
-        for idx, project in enumerate(projects, start=1):
-            # Print simple progress for document creation
-            if idx % 100 == 0 or idx == total_projects:
-                print(f"🔨 Creating document chunks: {idx}/{total_projects} projects processed", flush=True)
-            project_id = project.get('project_id', '')
-            project_name = project.get('project_name', '')
-            description = project.get('description', '')
-            methodology = project.get('methodology', '')
-            status = project.get('registry_status', '')
-            country = project.get('country', '')
-            category = project.get('category', '')
-            price = project.get('price', 'N/A')
-            available_credits = project.get('available_credits', 'N/A')
-            summary = project.get('project_summary', description)
+        for project in projects:
+            project_id = self._get_project_id(project)
             
-            # Create content string
-            content = f"""Project: {project_name}
-Project ID: {project_id}
-Country: {country}
-Category: {category}
-Methodology: {methodology}
-Status: {status}
-Price per Credit: ${price}
-Available Credits: {available_credits:,} if isinstance(available_credits, int) else available_credits
-
-Description: {description}
-
-Summary: {summary}"""
+            # Extract text content
+            name = project.get('name', '').strip()
+            description = project.get('description', '').strip()
+            
+            # Clean HTML tags if any
+            import re
+            description = re.sub(r'<[^>]+>', '', description).strip()
+            
+            registry = project.get('registry', 'Unknown')
+            project_type = project.get('type', 'Unknown')
+            country = project.get('country', 'Unknown')
+            methodology = project.get('methodology', '')
+            status = project.get('status', '')
+            registry_link = project.get('registry_link', '')
+            
+            # Create content
+            content = f"Name: {name}\n\nRegistry: {registry}\nType: {project_type}\nCountry: {country}\nMethodology: {methodology}\nStatus: {status}\n\n{description}"
             
             # Create metadata
             metadata = {
-                'project_id': project_id,
-                'project_name': project_name,
+                'name': name,
+                'registry': registry,
+                'type': project_type,
                 'country': country,
-                'category': category,
                 'methodology': methodology,
                 'status': status,
-                'price': price,
-                'available_credits': available_credits,
-                'buy_link': project.get('buy_link', ''),
-                'type': 'carbon_project'
+                'registry_link': registry_link,
+                'project_id': project_id,
+                'id': project.get('id', '')
             }
             
-            # Split into chunks if content is long
-            if len(content) > 500:
-                chunks = self.text_splitter.split_text(content)
-                for i, chunk in enumerate(chunks):
-                    chunk_metadata = metadata.copy()
-                    chunk_metadata['chunk_index'] = i
-                    documents.append(Document(page_content=chunk, metadata=chunk_metadata))
-            else:
-                documents.append(Document(page_content=content, metadata=metadata))
+            # Split into chunks
+            splits = self.text_splitter.split_text(content)
+            for i, chunk in enumerate(splits):
+                chunk_metadata = metadata.copy()
+                chunk_metadata['chunk_index'] = i
+                documents.append(Document(page_content=chunk, metadata=chunk_metadata))
         
-        logger.info(f"📄 Created {len(documents)} project document chunks")
         return documents
     
     def _initialize_vector_store(self):
@@ -228,107 +206,133 @@ Summary: {summary}"""
         if not LANGCHAIN_AVAILABLE or self.embeddings is None:
             return
         
-        current_hash = self._compute_file_hash()
-        stored_hash = self._get_stored_hash()
-        
-        # Check if we can load existing vector store
         faiss_index_path = self.vector_store_path / "index.faiss"
-        if faiss_index_path.exists() and current_hash == stored_hash:
+        
+        # Try to load existing vector store
+        if faiss_index_path.exists():
             try:
-                logger.info("📂 Loading existing projects vector store...")
+                print(f"📂 Found existing vector store at: {self.vector_store_path}")
+                logger.info("📂 Loading existing vector store...")
                 self.vector_store = FAISS.load_local(
                     str(self.vector_store_path),
                     self.embeddings,
                     allow_dangerous_deserialization=True
                 )
-                # Also load the projects data
-                self._load_projects()
-                self._initialized = True
-                logger.info("✅ Projects vector store loaded successfully")
+                print(f"   ✓ Vector store loaded successfully")
+                logger.info("✅ Vector store loaded")
+                # Check for new projects and add them incrementally
+                print("🔄 Checking for new projects...")
+                self._add_new_projects()
                 return
             except Exception as e:
-                logger.warning(f"⚠️ Failed to load projects vector store: {e}")
+                logger.warning(f"⚠️ Failed to load vector store: {e}")
+                print(f"   ⚠️ Failed to load: {e}")
+                print("   Will build from scratch...")
+        else:
+            print(f"   No existing vector store found")
         
-        # Build new vector store
-        self._rebuild_vector_store()
+        # Build initial vector store
+        self._build_initial_vector_store()
     
-    def _rebuild_vector_store(self):
-        """Rebuild the entire vector store from projects.jsonl."""
-        if not LANGCHAIN_AVAILABLE or self.embeddings is None:
-            return
-        
+    def _build_initial_vector_store(self):
+        """Build the vector store from scratch (first time only)."""
         with self._lock:
-            logger.info("🔨 Building projects vector store...")
+            print("=" * 70)
+            print("🔨 BUILDING INITIAL VECTOR STORE")
+            print("=" * 70)
+            logger.info("🔨 Building initial vector store...")
             
-            projects = self._load_projects()
+            print("📂 Step 1/5: Loading projects from projects.jsonl...")
+            projects = self._load_all_projects()
             if not projects:
                 logger.warning("⚠️ No projects to index")
                 return
+            print(f"   ✓ Loaded {len(projects)} projects")
             
+            print(f"📝 Step 2/5: Creating document chunks...")
             documents = self._create_documents(projects)
             if not documents:
                 logger.warning("⚠️ No documents created")
                 return
+            print(f"   ✓ Created {len(documents)} chunks")
             
-            try:
-                # Manually embed documents in batches with progress reporting
-                # (Can't monkey-patch HuggingFaceEmbeddings since it's a Pydantic model)
-                print("🔁 Starting embedding with progress...", flush=True)
-                
-                texts = [doc.page_content for doc in documents]
-                total = len(texts)
-                batch_size = 512
-                all_embeddings = []
-                
-                for i in range(0, total, batch_size):
-                    batch = texts[i:i+batch_size]
-                    batch_embeddings = self.embeddings.embed_documents(batch)
-                    all_embeddings.extend(batch_embeddings)
-                    done = i + len(batch)
-                    pct = (done / total) * 100 if total else 100
-                    print(f"\r🔁 Embedding progress: {done}/{total} ({pct:.1f}%)", end='', flush=True)
-                
-                print("")  # newline after progress
-                
-                # Build FAISS index from pre-computed embeddings
-                print("🔨 Building FAISS index...", flush=True)
-                text_embedding_pairs = list(zip(texts, all_embeddings))
-                metadatas = [doc.metadata for doc in documents]
-                self.vector_store = FAISS.from_embeddings(
-                    text_embedding_pairs,
-                    self.embeddings,
-                    metadatas=metadatas
-                )
-                
-                # Save to disk
-                self.vector_store_path.mkdir(parents=True, exist_ok=True)
-                self.vector_store.save_local(str(self.vector_store_path))
-                
-                # Save hash
-                current_hash = self._compute_file_hash()
-                self._save_hash(current_hash)
-                
-                self._initialized = True
-                logger.info(f"✅ Projects vector store built with {len(documents)} chunks")
-                
-            except Exception as e:
-                logger.error(f"❌ Failed to build projects vector store: {e}")
-                import traceback
-                traceback.print_exc()
+            print(f"🤖 Step 3/5: Generating embeddings and building FAISS index...")
+            print(f"   (This may take a few minutes for {len(documents)} chunks...)")
+            # Create FAISS vector store
+            self.vector_store = FAISS.from_documents(documents, self.embeddings)
+            print(f"   ✓ FAISS index built successfully")
+            
+            print(f"💾 Step 4/5: Saving vector store to disk...")
+            # Save to disk
+            self.vector_store_path.mkdir(parents=True, exist_ok=True)
+            self.vector_store.save_local(str(self.vector_store_path))
+            print(f"   ✓ Saved to {self.vector_store_path}")
+            
+            print(f"📋 Step 5/5: Updating indexed project IDs...")
+            # Update indexed IDs
+            for project in projects:
+                self.indexed_ids.add(self._get_project_id(project))
+            self._save_indexed_ids()
+            print(f"   ✓ Saved {len(self.indexed_ids)} indexed IDs")
+            
+            print("=" * 70)
+            print(f"✅ VECTOR STORE READY: {len(documents)} chunks from {len(projects)} projects")
+            print("=" * 70)
+            logger.info(f"✅ Initial vector store built with {len(documents)} chunks from {len(projects)} projects")
     
-    def check_and_update(self) -> bool:
-        """Check if projects.jsonl has changed and update vector store if needed."""
-        current_hash = self._compute_file_hash()
-        stored_hash = self._get_stored_hash()
+    def _add_new_projects(self):
+        """Add only new projects to existing vector store (incremental update)."""
+        if self.vector_store is None:
+            return
         
-        if current_hash != stored_hash:
-            logger.info("🔄 Projects file changed, rebuilding vector store...")
-            self._rebuild_vector_store()
-            return True
-        return False
+        with self._lock:
+            new_projects = self._get_new_projects()
+            
+            if not new_projects:
+                return
+            
+            print("-" * 70)
+            print(f"➕ INCREMENTAL UPDATE: Adding {len(new_projects)} new projects")
+            print("-" * 70)
+            logger.info(f"➕ Adding {len(new_projects)} new projects incrementally...")
+            
+            print(f"📝 Creating document chunks...")
+            documents = self._create_documents(new_projects)
+            if not documents:
+                return
+            print(f"   ✓ Created {len(documents)} new chunks")
+            
+            print(f"🤖 Generating embeddings and updating FAISS index...")
+            # Add documents to existing vector store (incremental)
+            self.vector_store.add_documents(documents)
+            print(f"   ✓ Added to vector store")
+            
+            print(f"💾 Saving updated vector store...")
+            # Save updated vector store
+            self.vector_store.save_local(str(self.vector_store_path))
+            print(f"   ✓ Saved to disk")
+            
+            print(f"📋 Updating indexed IDs...")
+            # Update indexed IDs
+            for project in new_projects:
+                self.indexed_ids.add(self._get_project_id(project))
+            self._save_indexed_ids()
+            print(f"   ✓ Updated indexed IDs")
+            
+            print("-" * 70)
+            print(f"✅ UPDATE COMPLETE: Added {len(documents)} chunks from {len(new_projects)} projects")
+            print(f"   Total indexed projects: {len(self.indexed_ids)}")
+            print("-" * 70)
+            logger.info(f"✅ Added {len(documents)} new chunks from {len(new_projects)} projects")
+    
+    def _check_and_update(self):
+        """Background task: check for new projects and add them incrementally."""
+        new_projects = self._get_new_projects()
+        if new_projects:
+            self._add_new_projects()
     
     def start_watching(self, interval: int = 60):
-        """Start a background thread to watch for projects.jsonl changes."""
+        """Start background thread to watch for projects.jsonl changes."""
         if self._watch_thread is not None:
             return
         
@@ -337,9 +341,9 @@ Summary: {summary}"""
         def watch_loop():
             while not self._stop_watching:
                 try:
-                    self.check_and_update()
+                    self._check_and_update()
                 except Exception as e:
-                    logger.error(f"Error in projects watch loop: {e}")
+                    logger.error(f"Error in watch loop: {e}")
                 time.sleep(interval)
         
         self._watch_thread = threading.Thread(target=watch_loop, daemon=True)
@@ -353,145 +357,52 @@ Summary: {summary}"""
             self._watch_thread.join(timeout=5)
             self._watch_thread = None
     
-    def search(self, query: str, k: int = 5) -> List[Tuple[Document, float]]:
-        """
-        Search for relevant projects.
-        
-        Args:
-            query: Search query
-            k: Number of results to return
-            
-        Returns:
-            List of (Document, score) tuples
-        """
-        if not self._initialized or self.vector_store is None:
-            logger.warning("⚠️ Projects vector store not initialized")
-            return []
-        
-        try:
-            results = self.vector_store.similarity_search_with_score(query, k=k)
-            return results
-        except Exception as e:
-            logger.error(f"❌ Projects search error: {e}")
-            return []
+    # ============================================================================
+    # MAIN FUNCTION - RAG SEARCH
+    # ============================================================================
     
-    def query(self, question: str, k: int = 5) -> Dict:
+    def search_projects(self, query: str, k: int = 5) -> List[Dict]:
         """
-        Query the projects corpus and return relevant context.
+        Main function: Search for relevant project chunks using RAG.
         
         Args:
-            question: User's question
-            k: Number of chunks to retrieve
+            query: Search query or question
+            k: Number of chunks to return
             
         Returns:
-            Dict with 'context', 'projects', and 'chunks'
+            List of dicts with 'content', 'name', 'registry', 'registry_link', etc.
         """
-        results = self.search(question, k=k)
+        if self.vector_store is None:
+            logger.warning("⚠️ Vector store not initialized")
+            return []
         
-        if not results:
-            return {
-                'context': '',
-                'projects': [],
-                'chunks': [],
-                'found': False
-            }
+        # Perform similarity search
+        results = self.vector_store.similarity_search_with_score(query, k=k)
         
-        # Deduplicate projects
-        seen_ids = set()
-        projects = []
+        # Format results
         chunks = []
-        context_parts = []
-        
         for doc, score in results:
-            project_id = doc.metadata.get('project_id', '')
-            
-            # Add chunk info
             chunks.append({
                 'content': doc.page_content,
-                'score': float(score),
-                'metadata': doc.metadata
+                'name': doc.metadata.get('name', ''),
+                'registry': doc.metadata.get('registry', 'Unknown'),
+                'registry_link': doc.metadata.get('registry_link', ''),
+                'type': doc.metadata.get('type', 'Unknown'),
+                'country': doc.metadata.get('country', 'Unknown'),
+                'methodology': doc.metadata.get('methodology', ''),
+                'status': doc.metadata.get('status', ''),
+                'id': doc.metadata.get('id', ''),
+                'metadata': doc.metadata,
+                'score': float(score)
             })
-            
-            # Add to context
-            context_parts.append(doc.page_content)
-            
-            # Deduplicate projects
-            if project_id and project_id not in seen_ids:
-                seen_ids.add(project_id)
-                projects.append({
-                    'project_id': project_id,
-                    'project_name': doc.metadata.get('project_name', ''),
-                    'country': doc.metadata.get('country', ''),
-                    'category': doc.metadata.get('category', ''),
-                    'methodology': doc.metadata.get('methodology', ''),
-                    'status': doc.metadata.get('status', ''),
-                    'price': doc.metadata.get('price', 'N/A'),
-                    'available_credits': doc.metadata.get('available_credits', 'N/A'),
-                    'buy_link': doc.metadata.get('buy_link', '')
-                })
         
-        return {
-            'context': '\n\n---\n\n'.join(context_parts),
-            'projects': projects,
-            'chunks': chunks,
-            'found': True
-        }
-    
-    def get_project_by_id(self, project_id: str) -> Optional[Dict]:
-        """Get a specific project by ID."""
-        for project in self._projects_data:
-            if project.get('project_id', '').upper() == project_id.upper():
-                return project
-        return None
-    
-    def get_projects_by_country(self, country: str) -> List[Dict]:
-        """Get projects by country."""
-        country_lower = country.lower()
-        return [p for p in self._projects_data if country_lower in p.get('country', '').lower()]
-    
-    def get_projects_by_category(self, category: str) -> List[Dict]:
-        """Get projects by category."""
-        category_lower = category.lower()
-        return [p for p in self._projects_data if category_lower in p.get('category', '').lower()]
-    
-    def list_all_countries(self) -> List[str]:
-        """List all unique countries with projects."""
-        countries = set()
-        for project in self._projects_data:
-            country = project.get('country', '')
-            if country:
-                countries.add(country)
-        return sorted(list(countries))
-    
-    def list_all_categories(self) -> List[str]:
-        """List all unique project categories."""
-        categories = set()
-        for project in self._projects_data:
-            category = project.get('category', '')
-            if category:
-                categories.add(category)
-        return sorted(list(categories))
-    
-    def get_stats(self) -> Dict:
-        """Get statistics about the vector store."""
-        stats = {
-            'initialized': self._initialized,
-            'projects_file_exists': self.projects_path.exists(),
-            'vector_store_exists': (self.vector_store_path / "index.faiss").exists(),
-        }
-        
-        if self._projects_data:
-            stats['total_projects'] = len(self._projects_data)
-            stats['countries'] = len(self.list_all_countries())
-            stats['categories'] = len(self.list_all_categories())
-        
-        if self.vector_store:
-            stats['total_chunks'] = self.vector_store.index.ntotal
-        
-        return stats
+        return chunks
 
 
-# Global instance
+# ============================================================================
+# GLOBAL INSTANCE & PUBLIC API
+# ============================================================================
+
 _projects_rag_service: Optional[ProjectsRAGService] = None
 
 
@@ -506,43 +417,59 @@ def get_projects_rag_service() -> Optional[ProjectsRAGService]:
     return _projects_rag_service
 
 
-def search_projects(query: str, k: int = 5) -> Dict:
+def search_projects(query: str, k: int = 5) -> List[Dict]:
     """
-    Search carbon projects using RAG.
+    Main public function: Search projects using RAG.
     
     Args:
         query: Search query or question
-        k: Number of results
+        k: Number of chunks to return
         
     Returns:
-        Dict with context, projects, and chunks
+        List of dicts with:
+        - 'content': The text content
+        - 'name': Project name
+        - 'registry': Registry name
+        - 'registry_link': URL to registry
+        - 'type': Project type
+        - 'country': Country
+        - 'methodology': Methodology
+        - 'status': Project status
+        - 'id': Project ID
+        - 'metadata': Full metadata dict
+        - 'score': Similarity score
+    
+    Example:
+        chunks = search_projects("renewable energy projects", k=3)
+        for chunk in chunks:
+            print(chunk['name'])
+            print(chunk['registry'])
+            print(chunk['registry_link'])
+            print(chunk['content'])
     """
     service = get_projects_rag_service()
     if service:
-        return service.query(query, k=k)
-    return {'context': '', 'projects': [], 'chunks': [], 'found': False}
+        return service.search_projects(query, k=k)
+    return []
 
 
-# For testing
+# ============================================================================
+# TESTING
+# ============================================================================
+
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     
     print("🚀 Testing Projects RAG Service...")
-    service = ProjectsRAGService()
-    
-    print("\n📊 Stats:", service.get_stats())
     
     # Test search
-    test_queries = [
-        "forestry projects in India",
-        "renewable energy carbon credits",
-        "cheapest carbon credits"
-    ]
+    results = search_projects("tesla", k=3)
     
-    for query in test_queries:
-        print(f"\n🔍 Query: {query}")
-        results = service.query(query, k=3)
-        print(f"   Found: {results['found']}")
-        print(f"   Projects: {len(results['projects'])}")
-        for proj in results['projects'][:2]:
-            print(f"   - {proj['project_name'][:50]}... ({proj['country']})")
+    print(f"\n📊 Found {len(results)} chunks:")
+    for i, chunk in enumerate(results, 1):
+        print(f"\n{i}. Score: {chunk['score']:.4f}")
+        print(f"   Name: {chunk['name']}")
+        print(f"   Registry: {chunk['registry']}")
+        print(f"   Link: {chunk['registry_link']}")
+        print(f"   Country: {chunk['country']}")
+        print(f"   Content: {chunk['content'][:200]}...")

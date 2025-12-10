@@ -1,147 +1,131 @@
 """
 News RAG Service - Vector Store and Retrieval Augmented Generation
 
-This service:
-1. Monitors news.jsonl for changes
-2. Generates embeddings using sentence-transformers
-3. Stores embeddings in FAISS vector store
-4. Provides RAG-based question answering on news content
+Main Function:
+- search_news(query, k) -> Returns top-k RAG-matched chunks
+
+Features:
+- Incremental updates (only adds new articles, doesn't rebuild from scratch)
+- Monitors news.jsonl for changes
+- Uses FAISS vector store with HuggingFace embeddings
 """
 
 import os
 import json
 import logging
-import hashlib
 import threading
 import time
 from pathlib import Path
-from typing import List, Dict, Optional, Tuple
-from datetime import datetime
+from typing import List, Dict, Optional
 
 # Vector store and embeddings
 LANGCHAIN_AVAILABLE = False
-FAISS = None
-HuggingFaceEmbeddings = None
-RecursiveCharacterTextSplitter = None
-Document = None
 
 try:
-    # Try langchain-community first
-    from langchain_community.vectorstores import FAISS as _FAISS
-    from langchain_community.embeddings import HuggingFaceEmbeddings as _HuggingFaceEmbeddings
-    FAISS = _FAISS
-    HuggingFaceEmbeddings = _HuggingFaceEmbeddings
-except ImportError:
-    pass
-
-try:
-    # Try langchain_core for Document
-    from langchain_core.documents import Document as _Document
-    Document = _Document
-except ImportError:
-    try:
-        from langchain.schema import Document as _Document
-        Document = _Document
-    except ImportError:
-        pass
-
-try:
-    from langchain_text_splitters import RecursiveCharacterTextSplitter as _RecursiveCharacterTextSplitter
-    RecursiveCharacterTextSplitter = _RecursiveCharacterTextSplitter
-except ImportError:
-    try:
-        from langchain.text_splitter import RecursiveCharacterTextSplitter as _RecursiveCharacterTextSplitter
-        RecursiveCharacterTextSplitter = _RecursiveCharacterTextSplitter
-    except ImportError:
-        pass
-
-# Check if all required components are available
-if FAISS is not None and HuggingFaceEmbeddings is not None and Document is not None and RecursiveCharacterTextSplitter is not None:
+    from langchain_community.document_loaders import JSONLoader
+    from langchain_text_splitters import RecursiveCharacterTextSplitter
+    from langchain_community.embeddings import HuggingFaceEmbeddings
+    from langchain_community.vectorstores import FAISS
+    from langchain_core.documents import Document
     LANGCHAIN_AVAILABLE = True
-else:
-    print("⚠️ LangChain community packages not available. Install with: pip install langchain-community faiss-cpu sentence-transformers")
+except ImportError:
+    print("⚠️ LangChain packages not available. Install with: pip install langchain-community faiss-cpu sentence-transformers")
 
 logger = logging.getLogger(__name__)
 
 # Paths
 NEWS_JSONL_PATH = Path(__file__).parent.parent / "carbon-intelligence" / "server" / "output" / "news.jsonl"
 VECTOR_STORE_PATH = Path(__file__).parent.parent / "carbon-intelligence" / "server" / "output" / "news_vector_store"
-HASH_FILE_PATH = VECTOR_STORE_PATH / "news_hash.txt"
+INDEXED_IDS_FILE = VECTOR_STORE_PATH / "indexed_ids.json"
 
 
 class NewsRAGService:
     """
     RAG service for carbon/ESG news articles.
-    Maintains a FAISS vector store that syncs with news.jsonl.
+    Main function: search_news(query, k) -> returns top-k chunks
     """
     
     def __init__(self, news_path: str = None, vector_store_path: str = None):
         """Initialize the RAG service."""
+        print("\n" + "=" * 70)
+        print("🚀 INITIALIZING NEWS RAG SERVICE")
+        print("=" * 70)
+        
         self.news_path = Path(news_path) if news_path else NEWS_JSONL_PATH
         self.vector_store_path = Path(vector_store_path) if vector_store_path else VECTOR_STORE_PATH
-        self.hash_file_path = self.vector_store_path / "news_hash.txt"
+        self.indexed_ids_file = self.vector_store_path / "indexed_ids.json"
         
         self.vector_store: Optional[FAISS] = None
         self.embeddings = None
         self.text_splitter = None
-        self._initialized = False
         self._lock = threading.Lock()
         self._watch_thread = None
         self._stop_watching = False
+        self.indexed_ids = set()
         
         if not LANGCHAIN_AVAILABLE:
             logger.error("❌ LangChain packages not available")
             return
         
-        # Initialize embeddings model (using a small, fast model)
+        # Initialize embeddings model
+        print("📥 Loading HuggingFace embedding model...")
         logger.info("🚀 Loading embedding model...")
-        try:
-            from langchain_huggingface import HuggingFaceEmbeddings
-            self.embeddings = HuggingFaceEmbeddings(
-                model_name="sentence-transformers/all-MiniLM-L6-v2",
-                model_kwargs={'device': 'cpu'},
-                encode_kwargs={'normalize_embeddings': True}
-            )
-            logger.info("✅ Embedding model loaded")
-        except Exception as e:
-            logger.error(f"❌ Failed to load embedding model: {e}")
-            return
+        self.embeddings = HuggingFaceEmbeddings(
+            model_name="sentence-transformers/all-MiniLM-L6-v2",
+            model_kwargs={'device': 'cpu'},
+            encode_kwargs={'normalize_embeddings': True}
+        )
+        print("   ✓ Embedding model loaded: sentence-transformers/all-MiniLM-L6-v2")
+        logger.info("✅ Embedding model loaded")
         
-        # Text splitter for chunking articles
+        # Text splitter for chunking
+        print("✂️  Configuring text splitter (chunk_size=1000, overlap=200)")
         self.text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=500,
-            chunk_overlap=50,
-            length_function=len,
-            separators=["\n\n", "\n", ". ", " ", ""]
+            chunk_size=1000,
+            chunk_overlap=200
         )
         
-        # Initialize or load vector store
-        self._initialize_vector_store()
-    
-    def _compute_file_hash(self) -> str:
-        """Compute MD5 hash of news.jsonl file."""
-        if not self.news_path.exists():
-            return ""
+        # Load indexed IDs and initialize vector store
+        print("📋 Loading indexed article IDs...")
+        self._load_indexed_ids()
         
-        hash_md5 = hashlib.md5()
-        with open(self.news_path, "rb") as f:
-            for chunk in iter(lambda: f.read(4096), b""):
-                hash_md5.update(chunk)
-        return hash_md5.hexdigest()
+        print("🔍 Checking for existing vector store...")
+        self._initialize_vector_store()
+        print("=" * 70 + "\n")
     
-    def _get_stored_hash(self) -> str:
-        """Get the stored hash from previous indexing."""
-        if self.hash_file_path.exists():
-            return self.hash_file_path.read_text().strip()
-        return ""
+    # ============================================================================
+    # HELPER FUNCTIONS
+    # ============================================================================
     
-    def _save_hash(self, hash_value: str):
-        """Save the current hash."""
+    def _load_indexed_ids(self):
+        """Load the set of already indexed article IDs."""
+        if self.indexed_ids_file.exists():
+            try:
+                with open(self.indexed_ids_file, 'r') as f:
+                    data = json.load(f)
+                    self.indexed_ids = set(data.get('indexed_ids', []))
+                logger.info(f"📋 Loaded {len(self.indexed_ids)} indexed article IDs")
+            except Exception as e:
+                logger.warning(f"⚠️ Could not load indexed IDs: {e}")
+                self.indexed_ids = set()
+    
+    def _save_indexed_ids(self):
+        """Save the set of indexed article IDs."""
         self.vector_store_path.mkdir(parents=True, exist_ok=True)
-        self.hash_file_path.write_text(hash_value)
+        with open(self.indexed_ids_file, 'w') as f:
+            json.dump({'indexed_ids': list(self.indexed_ids)}, f)
     
-    def _load_news_articles(self) -> List[Dict]:
-        """Load news articles from JSONL file."""
+    def _get_article_id(self, article: Dict) -> str:
+        """Generate unique ID for an article."""
+        title = article.get('title', '')
+        link = article.get('link', '')
+        published = article.get('published', '')
+        unique_str = f"{title}|{link}|{published}"
+        import hashlib
+        return hashlib.md5(unique_str.encode()).hexdigest()
+    
+    def _load_all_articles(self) -> List[Dict]:
+        """Load all articles from JSONL file."""
         articles = []
         if not self.news_path.exists():
             logger.warning(f"⚠️ News file not found: {self.news_path}")
@@ -150,24 +134,38 @@ class NewsRAGService:
         with open(self.news_path, 'r', encoding='utf-8') as f:
             for line in f:
                 try:
-                    article = json.loads(line.strip())
-                    articles.append(article)
+                    articles.append(json.loads(line.strip()))
                 except json.JSONDecodeError:
                     continue
         
-        logger.info(f"📰 Loaded {len(articles)} news articles")
         return articles
+    
+    def _get_new_articles(self) -> List[Dict]:
+        """Get only new articles that haven't been indexed yet."""
+        all_articles = self._load_all_articles()
+        new_articles = []
+        
+        for article in all_articles:
+            article_id = self._get_article_id(article)
+            if article_id not in self.indexed_ids:
+                new_articles.append(article)
+        
+        if new_articles:
+            logger.info(f"🆕 Found {len(new_articles)} new articles to index")
+        return new_articles
     
     def _create_documents(self, articles: List[Dict]) -> List[Document]:
         """Convert articles to LangChain Documents with chunking."""
         documents = []
         
         for article in articles:
-            # Extract clean text content
+            article_id = self._get_article_id(article)
+            
+            # Extract text content
             title = article.get('title', '').strip()
-            # Clean HTML from summary
             summary = article.get('summary', '')
-            # Remove HTML tags
+            
+            # Clean HTML tags
             import re
             summary = re.sub(r'<[^>]+>', '', summary).strip()
             
@@ -176,7 +174,7 @@ class NewsRAGService:
             sentiment = article.get('sentiment', 'Neutral')
             link = article.get('link', '')
             
-            # Create content string
+            # Create content
             content = f"Title: {title}\n\nSource: {source}\nPublished: {published}\nSentiment: {sentiment}\n\n{summary}"
             
             # Create metadata
@@ -186,20 +184,16 @@ class NewsRAGService:
                 'published': published,
                 'sentiment': sentiment,
                 'link': link,
-                'type': 'news_article'
+                'article_id': article_id
             }
             
-            # Split into chunks if content is long
-            if len(content) > 500:
-                chunks = self.text_splitter.split_text(content)
-                for i, chunk in enumerate(chunks):
-                    chunk_metadata = metadata.copy()
-                    chunk_metadata['chunk_index'] = i
-                    documents.append(Document(page_content=chunk, metadata=chunk_metadata))
-            else:
-                documents.append(Document(page_content=content, metadata=metadata))
+            # Split into chunks
+            splits = self.text_splitter.split_text(content)
+            for i, chunk in enumerate(splits):
+                chunk_metadata = metadata.copy()
+                chunk_metadata['chunk_index'] = i
+                documents.append(Document(page_content=chunk, metadata=chunk_metadata))
         
-        logger.info(f"📄 Created {len(documents)} document chunks")
         return documents
     
     def _initialize_vector_store(self):
@@ -207,82 +201,133 @@ class NewsRAGService:
         if not LANGCHAIN_AVAILABLE or self.embeddings is None:
             return
         
-        current_hash = self._compute_file_hash()
-        stored_hash = self._get_stored_hash()
-        
-        # Check if we can load existing vector store
         faiss_index_path = self.vector_store_path / "index.faiss"
-        if faiss_index_path.exists() and current_hash == stored_hash:
+        
+        # Try to load existing vector store
+        if faiss_index_path.exists():
             try:
+                print(f"📂 Found existing vector store at: {self.vector_store_path}")
                 logger.info("📂 Loading existing vector store...")
                 self.vector_store = FAISS.load_local(
                     str(self.vector_store_path),
                     self.embeddings,
                     allow_dangerous_deserialization=True
                 )
-                self._initialized = True
-                logger.info("✅ Vector store loaded successfully")
+                print(f"   ✓ Vector store loaded successfully")
+                logger.info("✅ Vector store loaded")
+                # Check for new articles and add them incrementally
+                print("🔄 Checking for new articles...")
+                self._add_new_articles()
                 return
             except Exception as e:
                 logger.warning(f"⚠️ Failed to load vector store: {e}")
+                print(f"   ⚠️ Failed to load: {e}")
+                print("   Will build from scratch...")
+        else:
+            print(f"   No existing vector store found")
         
-        # Build new vector store
-        self._rebuild_vector_store()
+        # Build initial vector store
+        self._build_initial_vector_store()
     
-    def _rebuild_vector_store(self):
-        """Rebuild the entire vector store from news.jsonl."""
-        if not LANGCHAIN_AVAILABLE or self.embeddings is None:
-            return
-        
+    def _build_initial_vector_store(self):
+        """Build the vector store from scratch (first time only)."""
         with self._lock:
-            logger.info("🔨 Building vector store from news.jsonl...")
+            print("=" * 70)
+            print("🔨 BUILDING INITIAL VECTOR STORE")
+            print("=" * 70)
+            logger.info("🔨 Building initial vector store...")
             
-            articles = self._load_news_articles()
+            print("📂 Step 1/5: Loading articles from news.jsonl...")
+            articles = self._load_all_articles()
             if not articles:
                 logger.warning("⚠️ No articles to index")
                 return
+            print(f"   ✓ Loaded {len(articles)} articles")
             
+            print(f"📝 Step 2/5: Creating document chunks...")
             documents = self._create_documents(articles)
             if not documents:
                 logger.warning("⚠️ No documents created")
                 return
+            print(f"   ✓ Created {len(documents)} chunks")
             
-            try:
-                # Create FAISS vector store
-                self.vector_store = FAISS.from_documents(
-                    documents,
-                    self.embeddings
-                )
-                
-                # Save to disk
-                self.vector_store_path.mkdir(parents=True, exist_ok=True)
-                self.vector_store.save_local(str(self.vector_store_path))
-                
-                # Save hash
-                current_hash = self._compute_file_hash()
-                self._save_hash(current_hash)
-                
-                self._initialized = True
-                logger.info(f"✅ Vector store built with {len(documents)} chunks")
-                
-            except Exception as e:
-                logger.error(f"❌ Failed to build vector store: {e}")
-                import traceback
-                traceback.print_exc()
+            print(f"🤖 Step 3/5: Generating embeddings and building FAISS index...")
+            print(f"   (This may take a few minutes for {len(documents)} chunks...)")
+            # Create FAISS vector store
+            self.vector_store = FAISS.from_documents(documents, self.embeddings)
+            print(f"   ✓ FAISS index built successfully")
+            
+            print(f"💾 Step 4/5: Saving vector store to disk...")
+            # Save to disk
+            self.vector_store_path.mkdir(parents=True, exist_ok=True)
+            self.vector_store.save_local(str(self.vector_store_path))
+            print(f"   ✓ Saved to {self.vector_store_path}")
+            
+            print(f"📋 Step 5/5: Updating indexed article IDs...")
+            # Update indexed IDs
+            for article in articles:
+                self.indexed_ids.add(self._get_article_id(article))
+            self._save_indexed_ids()
+            print(f"   ✓ Saved {len(self.indexed_ids)} indexed IDs")
+            
+            print("=" * 70)
+            print(f"✅ VECTOR STORE READY: {len(documents)} chunks from {len(articles)} articles")
+            print("=" * 70)
+            logger.info(f"✅ Initial vector store built with {len(documents)} chunks from {len(articles)} articles")
     
-    def check_and_update(self) -> bool:
-        """Check if news.jsonl has changed and update vector store if needed."""
-        current_hash = self._compute_file_hash()
-        stored_hash = self._get_stored_hash()
+    def _add_new_articles(self):
+        """Add only new articles to existing vector store (incremental update)."""
+        if self.vector_store is None:
+            return
         
-        if current_hash != stored_hash:
-            logger.info("🔄 News file changed, rebuilding vector store...")
-            self._rebuild_vector_store()
-            return True
-        return False
+        with self._lock:
+            new_articles = self._get_new_articles()
+            
+            if not new_articles:
+                return
+            
+            print("-" * 70)
+            print(f"➕ INCREMENTAL UPDATE: Adding {len(new_articles)} new articles")
+            print("-" * 70)
+            logger.info(f"➕ Adding {len(new_articles)} new articles incrementally...")
+            
+            print(f"📝 Creating document chunks...")
+            documents = self._create_documents(new_articles)
+            if not documents:
+                return
+            print(f"   ✓ Created {len(documents)} new chunks")
+            
+            print(f"🤖 Generating embeddings and updating FAISS index...")
+            # Add documents to existing vector store (incremental)
+            self.vector_store.add_documents(documents)
+            print(f"   ✓ Added to vector store")
+            
+            print(f"💾 Saving updated vector store...")
+            # Save updated vector store
+            self.vector_store.save_local(str(self.vector_store_path))
+            print(f"   ✓ Saved to disk")
+            
+            print(f"📋 Updating indexed IDs...")
+            # Update indexed IDs
+            for article in new_articles:
+                self.indexed_ids.add(self._get_article_id(article))
+            self._save_indexed_ids()
+            print(f"   ✓ Updated indexed IDs")
+            
+            print("-" * 70)
+            print(f"✅ UPDATE COMPLETE: Added {len(documents)} chunks from {len(new_articles)} articles")
+            print(f"   Total indexed articles: {len(self.indexed_ids)}")
+            print("-" * 70)
+            logger.info(f"✅ Added {len(documents)} new chunks from {len(new_articles)} articles")
+    
+    def _check_and_update(self):
+        """Background task: check for new articles and add them incrementally."""
+        new_articles = self._get_new_articles()
+        if new_articles:
+            self._add_new_articles()
     
     def start_watching(self, interval: int = 60):
-        """Start a background thread to watch for news.jsonl changes."""
+        """Start background thread to watch for news.jsonl changes."""
         if self._watch_thread is not None:
             return
         
@@ -291,7 +336,7 @@ class NewsRAGService:
         def watch_loop():
             while not self._stop_watching:
                 try:
-                    self.check_and_update()
+                    self._check_and_update()
                 except Exception as e:
                     logger.error(f"Error in watch loop: {e}")
                 time.sleep(interval)
@@ -307,105 +352,49 @@ class NewsRAGService:
             self._watch_thread.join(timeout=5)
             self._watch_thread = None
     
-    def search(self, query: str, k: int = 5) -> List[Tuple[Document, float]]:
+    # ============================================================================
+    # MAIN FUNCTION - RAG SEARCH
+    # ============================================================================
+    
+    def search_news(self, query: str, k: int = 5) -> List[Dict]:
         """
-        Search for relevant news articles.
+        Main function: Search for relevant news chunks using RAG.
         
         Args:
-            query: Search query
-            k: Number of results to return
+            query: Search query or question
+            k: Number of chunks to return
             
         Returns:
-            List of (Document, score) tuples
+            List of dicts with 'content', 'metadata', 'score'
         """
-        if not self._initialized or self.vector_store is None:
+        if self.vector_store is None:
             logger.warning("⚠️ Vector store not initialized")
             return []
         
-        try:
-            results = self.vector_store.similarity_search_with_score(query, k=k)
-            return results
-        except Exception as e:
-            logger.error(f"❌ Search error: {e}")
-            return []
-    
-    def query(self, question: str, k: int = 5) -> Dict:
-        """
-        Query the news corpus and return relevant context.
+        # Perform similarity search
+        results = self.vector_store.similarity_search_with_score(query, k=k)
         
-        Args:
-            question: User's question
-            k: Number of chunks to retrieve
-            
-        Returns:
-            Dict with 'context', 'sources', and 'chunks'
-        """
-        results = self.search(question, k=k)
-        
-        if not results:
-            return {
-                'context': '',
-                'sources': [],
-                'chunks': [],
-                'found': False
-            }
-        
-        # Deduplicate sources
-        seen_titles = set()
-        sources = []
+        # Format results
         chunks = []
-        context_parts = []
-        
         for doc, score in results:
-            title = doc.metadata.get('title', '')
-            
-            # Add chunk info
             chunks.append({
                 'content': doc.page_content,
-                'score': float(score),
-                'metadata': doc.metadata
+                'title': doc.metadata.get('title', ''),
+                'source': doc.metadata.get('source', 'Unknown'),
+                'link': doc.metadata.get('link', ''),
+                'published': doc.metadata.get('published', ''),
+                'sentiment': doc.metadata.get('sentiment', 'Neutral'),
+                'metadata': doc.metadata,
+                'score': float(score)
             })
-            
-            # Add to context
-            context_parts.append(doc.page_content)
-            
-            # Deduplicate sources
-            if title and title not in seen_titles:
-                seen_titles.add(title)
-                sources.append({
-                    'title': title,
-                    'source': doc.metadata.get('source', 'Unknown'),
-                    'published': doc.metadata.get('published', ''),
-                    'sentiment': doc.metadata.get('sentiment', 'Neutral'),
-                    'link': doc.metadata.get('link', '')
-                })
         
-        return {
-            'context': '\n\n---\n\n'.join(context_parts),
-            'sources': sources,
-            'chunks': chunks,
-            'found': True
-        }
-    
-    def get_stats(self) -> Dict:
-        """Get statistics about the vector store."""
-        stats = {
-            'initialized': self._initialized,
-            'news_file_exists': self.news_path.exists(),
-            'vector_store_exists': (self.vector_store_path / "index.faiss").exists(),
-        }
-        
-        if self.news_path.exists():
-            articles = self._load_news_articles()
-            stats['total_articles'] = len(articles)
-        
-        if self.vector_store:
-            stats['total_chunks'] = self.vector_store.index.ntotal
-        
-        return stats
+        return chunks
 
 
-# Global instance
+# ============================================================================
+# GLOBAL INSTANCE & PUBLIC API
+# ============================================================================
+
 _news_rag_service: Optional[NewsRAGService] = None
 
 
@@ -420,43 +409,56 @@ def get_news_rag_service() -> Optional[NewsRAGService]:
     return _news_rag_service
 
 
-def search_news(query: str, k: int = 5) -> Dict:
+def search_news(query: str, k: int = 5) -> List[Dict]:
     """
-    Search news articles using RAG.
+    Main public function: Search news using RAG.
     
     Args:
         query: Search query or question
-        k: Number of results
+        k: Number of chunks to return
         
     Returns:
-        Dict with context, sources, and chunks
+        List of dicts with:
+        - 'content': The text content
+        - 'title': Article title
+        - 'source': News source
+        - 'link': URL to original article
+        - 'published': Publication date
+        - 'sentiment': Article sentiment
+        - 'metadata': Full metadata dict
+        - 'score': Similarity score
+    
+    Example:
+        chunks = search_news("carbon credits trends", k=3)
+        for chunk in chunks:
+            print(chunk['title'])
+            print(chunk['source'])
+            print(chunk['link'])
+            print(chunk['content'])
     """
     service = get_news_rag_service()
     if service:
-        return service.query(query, k=k)
-    return {'context': '', 'sources': [], 'chunks': [], 'found': False}
+        return service.search_news(query, k=k)
+    return []
 
 
-# For testing
+# ============================================================================
+# TESTING
+# ============================================================================
+
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     
     print("🚀 Testing News RAG Service...")
-    service = NewsRAGService()
-    
-    print("\n📊 Stats:", service.get_stats())
     
     # Test search
-    test_queries = [
-        "carbon credits",
-        "ESG investing trends",
-        "sustainable energy news"
-    ]
+    results = search_news("tesla", k=3)
     
-    for query in test_queries:
-        print(f"\n🔍 Query: {query}")
-        results = service.query(query, k=3)
-        print(f"   Found: {results['found']}")
-        print(f"   Sources: {len(results['sources'])}")
-        for src in results['sources'][:2]:
-            print(f"   - {src['title'][:60]}...")
+    print(f"\n📊 Found {len(results)} chunks:")
+    for i, chunk in enumerate(results, 1):
+        print(f"\n{i}. Score: {chunk['score']:.4f}")
+        print(f"   Title: {chunk['title']}")
+        print(f"   Source: {chunk['source']}")
+        print(f"   Link: {chunk['link']}")
+        print(f"   Published: {chunk['published']}")
+        print(f"   Content: {chunk['content'][:200]}...")

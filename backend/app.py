@@ -21,8 +21,7 @@ from services.projects_service import ProjectsService
 from services.analytics_service import AnalyticsService
 from services.company_service import CompanyService
 from services.project_report_service import ProjectReportService
-from aibot import aibot_bp, set_pathway_reader
-from data_sync_service import get_data_sync_service
+from aibot import aibot_bp, set_pathway_reader, set_company_service, set_project_service
 import frontend_actions
 
 # Import News RAG service for vector store initialization
@@ -70,27 +69,17 @@ project_report_service = ProjectReportService(pathway_reader)
 # Connect pathway_reader to aibot for company name resolution
 set_pathway_reader(pathway_reader)
 
-# Initialize News RAG service (vector store for news articles)
+# Connect services to aibot for comprehensive tool access
+set_company_service(company_service)
+set_project_service(project_report_service)
+
+# News RAG service will be lazy-loaded on first use (not at startup)
 if NEWS_RAG_AVAILABLE:
-    logger.info("🔍 Initializing News RAG Service (Vector Store)...")
-    try:
-        news_rag_service = get_news_rag_service()
-        if news_rag_service:
-            stats = news_rag_service.get_stats()
-            logger.info(f"✅ News RAG Service initialized - {stats.get('total_articles', 0)} articles indexed")
-        else:
-            logger.warning("⚠️ News RAG Service initialization returned None")
-    except Exception as e:
-        logger.error(f"❌ Failed to initialize News RAG Service: {e}")
+    logger.info("✅ News RAG Service available (will load on first use)")
 else:
     logger.warning("⚠️ News RAG Service not available - install langchain-community, faiss-cpu, sentence-transformers")
 
 logger.info("✅ All services initialized!")
-
-# Initialize Data Sync Service for continuous data updates
-logger.info("🔄 Initializing Data Sync Service...")
-data_sync_service = get_data_sync_service()
-data_sync_service.start()
 
 # ============================================================================
 # WEBSOCKET EVENTS
@@ -229,9 +218,25 @@ def get_projects():
     return jsonify(result)
 
 @app.route('/api/project/<project_id>', methods=['GET'])
-def get_project(project_id):
-    """Get specific project with AI-generated report - calls ProjectReportService"""
+def get_project_details(project_id):
+    """Section 1: Get project details - calls ProjectReportService"""
+    result = project_report_service.get_project_details(project_id)
+    return jsonify(result)
+
+@app.route('/api/project/<project_id>/report', methods=['GET'])
+def get_project_report(project_id):
+    """Section 2: Generate project report - calls ProjectReportService"""
     result = project_report_service.generate_project_report(project_id)
+    return jsonify(result)
+
+@app.route('/api/project/<project_id>/custom-query', methods=['POST'])
+def project_custom_query(project_id):
+    """Section 3: Answer questions about project - calls ProjectReportService"""
+    data = request.json or {}
+    query = data.get('query', '')
+    if not query:
+        return jsonify({'success': False, 'error': 'Query is required'}), 400
+    result = project_report_service.custom_query(project_id, query)
     return jsonify(result)
 
 @app.route('/api/projects/search', methods=['POST'])
@@ -244,31 +249,6 @@ def search_projects():
         return jsonify({'success': False, 'error': 'Query required'}), 400
     result = projects_service.search_projects(query, limit=limit)
     return jsonify(result)
-
-@app.route('/api/projects/featured', methods=['GET'])
-def get_featured_projects():
-    """Get featured projects - calls ProjectsService"""
-    limit = request.args.get('limit', 6, type=int)
-    result = projects_service.get_featured_projects(limit=limit)
-    return jsonify(result)
-
-@app.route('/api/projects/by-category', methods=['GET'])
-def get_projects_by_category():
-    """Get projects grouped by category - calls ProjectsService"""
-    result = projects_service.get_projects_by_category()
-    return jsonify(result)
-
-@app.route('/api/countries', methods=['GET'])
-def get_countries():
-    """Get countries list - calls ProjectsService"""
-    countries = projects_service.get_countries_list()
-    return jsonify({'success': True, 'data': countries})
-
-@app.route('/api/categories', methods=['GET'])
-def get_categories():
-    """Get categories list - calls ProjectsService"""
-    categories = projects_service.get_categories_list()
-    return jsonify({'success': True, 'data': categories})
 
 # ============================================================================
 # WATCHLIST/COMPANY ENDPOINTS (Dashboard Watchlist)
@@ -328,12 +308,6 @@ def get_news_by_sentiment(sentiment):
     result = live_news_service.get_news_by_sentiment(sentiment=sentiment, limit=limit)
     return jsonify(result)
 
-@app.route('/api/news/trending', methods=['GET'])
-def get_trending_topics():
-    """Get trending topics - calls LiveNewsService"""
-    result = live_news_service.get_trending_topics()
-    return jsonify(result)
-
 # ============================================================================
 # COMPANY DETAIL ENDPOINTS (Report Page)
 # ============================================================================
@@ -346,30 +320,24 @@ def get_company_details(ticker):
 
 @app.route('/api/company/<ticker>/insights', methods=['GET'])
 def get_company_insights(ticker):
-    """Get company insights with AI analysis - calls CompanyService"""
+    """Get general company insights - calls CompanyService"""
     result = company_service.get_company_insights(ticker)
     return jsonify(result)
 
-@app.route('/api/company/<ticker>/esg-milestones', methods=['GET'])
-def get_esg_milestones(ticker):
-    """Get ESG milestones timeline - calls CompanyService"""
-    result = company_service.get_esg_milestones(ticker)
+@app.route('/api/company/<ticker>/future-impact', methods=['GET'])
+def get_future_impact_analysis(ticker):
+    """Get sustainability and future impact analysis - calls CompanyService"""
+    result = company_service.get_future_impact_analysis(ticker)
     return jsonify(result)
 
-@app.route('/api/company/<ticker>/charts', methods=['GET'])
-def get_company_charts(ticker):
-    """Get company chart data - calls CompanyService"""
-    result = company_service.get_company_charts_data(ticker)
-    return jsonify(result)
-
-@app.route('/api/company/compare', methods=['POST'])
-def compare_companies():
-    """Compare multiple companies - calls CompanyService"""
-    data = request.json
-    tickers = data.get('tickers', [])
-    if not tickers or len(tickers) < 2:
-        return jsonify({'success': False, 'error': 'At least 2 tickers required'}), 400
-    result = company_service.compare_companies(tickers)
+@app.route('/api/company/<ticker>/custom-query', methods=['POST'])
+def custom_query(ticker):
+    """Answer custom questions about the company - calls CompanyService"""
+    data = request.json or {}
+    query = data.get('query', '')
+    if not query:
+        return jsonify({'success': False, 'error': 'Query is required'}), 400
+    result = company_service.custom_query(ticker, query)
     return jsonify(result)
 
 # ============================================================================

@@ -175,25 +175,25 @@ services:
       DB_PASSWORD: "carbonpw"
     restart: always
 
-  # Flask Backend API
-  backend:
-    build: ./backend
-    container_name: carbon_backend
-    depends_on:
-      carbon_pathway:
-        condition: service_healthy
-    ports:
-      - "5001:5000"
-    volumes:
-      - ./backend/carbon-intelligence/server/output:/app/carbon-intelligence/server/output
-    env_file:
-      - ./backend/.env
-    environment:
-      PYTHONUNBUFFERED: "1"
-      FLASK_ENV: "production"
-      PORT: "5000"
-      PATHWAY_OUTPUT_DIR: "/app/carbon-intelligence/server/output"
-    restart: always
+  # Flask Backend API - COMMENTED OUT (Running locally instead)
+  # backend:
+  #   build: ./backend
+  #   container_name: carbon_backend
+  #   depends_on:
+  #     carbon_pathway:
+  #       condition: service_healthy
+  #   ports:
+  #     - "5001:5000"
+  #   volumes:
+  #     - ./backend/carbon-intelligence/server/output:/app/carbon-intelligence/server/output
+  #   env_file:
+  #     - ./backend/.env
+  #   environment:
+  #     PYTHONUNBUFFERED: "1"
+  #     FLASK_ENV: "production"
+  #     PORT: "5000"
+  #     PATHWAY_OUTPUT_DIR: "/app/carbon-intelligence/server/output"
+  #   restart: always
 
 volumes:
   postgres_data:

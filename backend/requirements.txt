@@ -22,22 +22,32 @@ requests==2.31.0
 python-dateutil==2.8.2
 
 # AI/LLM for Report Generation and Chatbot
-langchain
-langchain-core
-langchain-google-genai
-langchain-community
-google-generativeai
-langchain-huggingface
+langchain>=0.3.0
+langchain-core>=0.3.0
+langchain-google-genai>=2.0.0
+langchain-ollama>=0.2.0
+langchain-community>=0.3.0
+google-generativeai>=0.8.0
+langchain-huggingface>=0.1.0
+
+# LangGraph for Agent Workflows
+langgraph>=0.2.0
+langgraph-checkpoint>=1.0.0
+
+# Tavily Search Tool
+tavily-python>=0.5.0
 
 # Vector Store and Embeddings for RAG
 faiss-cpu>=1.7.4
 sentence-transformers>=2.2.2
+langchain-text-splitters>=0.3.0
 
-# FastAPI Web Framework
-fastapi
-uvicorn
+# Text Processing
+feedparser>=6.0.10
+beautifulsoup4>=4.12.0
 
-# Data Science and Machine Learning
-joblib
-scikit-learn
-python-multipart
+# Additional Dependencies
+redis>=5.0.0
+yfinance>=0.2.0
+grpcio>=1.60.0
+grpcio-tools>=1.60.0
