@@ -10,13 +10,14 @@ Three main functions for project report page:
 import logging
 from typing import Dict, Any, Optional
 from llm_manager import get_llm
+import markdown
 
 # Try to import LangChain components for agent-based custom_query
 try:
     from langchain.agents import create_agent
+    from langchain.agents.middleware import before_agent
     from langchain_core.messages import HumanMessage, AIMessage
-    from langgraph.checkpoint.memory import InMemorySaver
-    from langchain.agents import create_middleware
+    from langgraph.checkpoint.memory import MemorySaver
     LANGCHAIN_AVAILABLE = True
 except ImportError:
     LANGCHAIN_AVAILABLE = False
@@ -114,7 +115,9 @@ class ProjectReportService:
                     logger.info(f"🤖 Generating AI report for {project_id}...")
                     prompt = self._create_report_prompt(project)
                     response = llm.invoke(prompt)
-                    ai_report = response.content
+                    ai_report_markdown = response.content
+                    # Convert markdown to HTML for proper formatting
+                    ai_report = markdown.markdown(ai_report_markdown, extensions=['nl2br', 'sane_lists'])
                     logger.info(f"✅ AI report generated for {project_id}")
                 except Exception as e:
                     logger.error(f"LLM error for {project_id}: {e}")
@@ -160,28 +163,17 @@ class ProjectReportService:
                 try:
                     logger.info(f"🤖 Answering question about {project_id}: {query}")
                     
-                    # InMemorySaver provides thread-local conversation persistence
-                    checkpointer = InMemorySaver()
+                    # MemorySaver provides thread-local conversation persistence
+                    checkpointer = MemorySaver()
                     
-                    # Custom middleware trims to last 5 exchanges (10 messages total)
-                    def trim_conversation(messages: list):
-                        """Keep last 5 HumanMessage/AIMessage pairs (10 messages max)."""
-                        recent = []
-                        count = 0
-                        for msg in reversed(messages):
-                            if isinstance(msg, (HumanMessage, AIMessage)):
-                                recent.append(msg)
-                                count += 1
-                                if count >= 10:  # 5 exchanges = 10 messages
-                                    break
-                        return list(reversed(recent))
-                    
-                    trimming_middleware = create_middleware({
-                        "beforeModel": lambda request: {
-                            **request,
-                            "messages": trim_conversation(request["messages"])
-                        }
-                    })
+                    # Message limit middleware - trim to most recent 10 messages
+                    @before_agent
+                    def message_limit_middleware(state, config):
+                        messages = state.get("messages", [])
+                        # Keep only the most recent 10 messages (5 exchanges)
+                        if len(messages) > 10:
+                            state["messages"] = messages[-10:]
+                        return state
                     
                     # Create agent with memory and trimming
                     project_context = f"""Project Information:
@@ -199,12 +191,15 @@ class ProjectReportService:
                     agent = create_agent(
                         model=llm,
                         checkpointer=checkpointer,
-                        middleware=[trimming_middleware],
-                        system_prompt=f"""You are an expert on carbon credit projects with conversation memory. Answer questions about this specific project clearly and accurately.
+                        middleware=[message_limit_middleware],
+                        system_prompt=f"""You are an expert on carbon credit projects analyzing {project.get('project_name', 'this project')} ({project_id}).
 
+CURRENT PROJECT CONTEXT:
 {project_context}
 
-Provide clear, concise answers based on the project data. If the question cannot be answered with available data, say so clearly. You can remember previous questions in this conversation."""
+Answer questions about THIS PROJECT clearly and accurately. All questions are about {project.get('project_name', 'this project')} unless stated otherwise.
+
+Provide clear, concise answers based on the project data. If the question cannot be answered with available data, say so clearly. You have conversation memory and can reference previous questions."""
                     )
                     
                     # Use thread_id for conversation memory per project
@@ -216,13 +211,29 @@ Provide clear, concise answers based on the project data. If the question cannot
                         config
                     )
                     
-                    answer = result["messages"][-1].content
+                    # Extract response - handle multimodal content
+                    last_message = result["messages"][-1]
+                    if hasattr(last_message, 'content'):
+                        content = last_message.content
+                        # If content is a list (multimodal), extract only text parts
+                        if isinstance(content, list):
+                            text_parts = [item.get('text', '') if isinstance(item, dict) else str(item) 
+                                          for item in content if isinstance(item, dict) and item.get('type') == 'text']
+                            answer = ' '.join(text_parts).strip()
+                        else:
+                            answer = str(content).strip()
+                    else:
+                        answer = str(last_message)
+                    
+                    # Convert markdown to HTML for proper formatting
+                    answer_html = markdown.markdown(answer, extensions=['nl2br', 'sane_lists'])
+                    
                     logger.info(f"✅ Answer generated for {project_id}")
                     
                     return {
                         'success': True,
                         'data': {
-                            'answer': answer,
+                            'answer': answer_html,
                             'question': query
                         }
                     }

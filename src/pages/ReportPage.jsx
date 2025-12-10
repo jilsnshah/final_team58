@@ -273,9 +273,10 @@ const ReportPage = () => {
               </h2>
               {companyInsights ? (
                 <div className="prose prose-invert prose-green max-w-none">
-                  <p className="text-slate-300 leading-relaxed whitespace-pre-wrap">
-                    {companyInsights.insights || "No insights available."}
-                  </p>
+                  <div 
+                    className="text-slate-300 leading-relaxed"
+                    dangerouslySetInnerHTML={{ __html: companyInsights.insights || "No insights available." }}
+                  />
                 </div>
               ) : (
                 <div className="flex items-center justify-center py-8">
@@ -295,9 +296,10 @@ const ReportPage = () => {
               </h2>
               {companyFutureImpact ? (
                 <div className="prose prose-invert prose-purple max-w-none">
-                  <p className="text-slate-300 leading-relaxed whitespace-pre-wrap">
-                    {companyFutureImpact.analysis || "No analysis available."}
-                  </p>
+                  <div 
+                    className="text-slate-300 leading-relaxed"
+                    dangerouslySetInnerHTML={{ __html: companyFutureImpact.analysis || "No analysis available." }}
+                  />
                 </div>
               ) : (
                 <div className="flex items-center justify-center py-8">
@@ -409,9 +411,10 @@ const ReportPage = () => {
                 </div>
               ) : projectReport ? (
                 <div className="prose prose-invert prose-green max-w-none">
-                  <div className="text-slate-300 leading-relaxed whitespace-pre-wrap">
-                    {projectReport.report || "No report available."}
-                  </div>
+                  <div 
+                    className="text-slate-300 leading-relaxed"
+                    dangerouslySetInnerHTML={{ __html: projectReport.report || "No report available." }}
+                  />
                 </div>
               ) : (
                 <p className="text-slate-400 text-center py-8">
@@ -456,7 +459,14 @@ const ReportPage = () => {
                         : "bg-slate-800 text-slate-200"
                     }`}
                   >
-                    <p className="whitespace-pre-wrap">{msg.content}</p>
+                    {msg.role === "assistant" ? (
+                      <div 
+                        className="prose prose-sm prose-invert max-w-none prose-headings:text-blue-300 prose-strong:text-blue-200 prose-a:text-blue-300"
+                        dangerouslySetInnerHTML={{ __html: msg.content }}
+                      />
+                    ) : (
+                      <p className="whitespace-pre-wrap">{msg.content}</p>
+                    )}
                   </div>
                 </div>
               ))

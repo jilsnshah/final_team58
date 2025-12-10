@@ -161,9 +161,8 @@ const DashboardChatSidebar = () => {
                           ? "prose-invert prose-headings:text-green-400 prose-strong:text-green-300 prose-a:text-green-400 prose-code:text-green-300"
                           : "prose-headings:text-green-700 prose-strong:text-green-700 prose-a:text-green-600 prose-code:text-green-600"
                       } prose-strong:font-bold prose-ul:list-disc prose-ul:ml-4 prose-li:my-0.5 prose-p:my-2 prose-p:leading-relaxed`}
-                    >
-                      <ReactMarkdown>{m.text}</ReactMarkdown>
-                    </div>
+                      dangerouslySetInnerHTML={{ __html: m.text }}
+                    />
                   ) : (
                     <p className="text-sm">{m.text}</p>
                   )}

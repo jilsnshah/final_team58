@@ -8,6 +8,7 @@ Uses the modern create_agent API for production-ready agent implementation.
 from flask import Blueprint, request, jsonify
 import logging
 import os
+import markdown
 from langchain.agents import create_agent
 from langchain.agents.middleware import before_agent
 from langchain.tools import tool
@@ -526,6 +527,7 @@ You're an expert guide helping users navigate sustainability investments, ESG an
 - When using RAG tools, summarize the key findings naturally
 - Explain technical terms (ESG, GII, carbon credits, REDD+) when needed
 - Minimal emojis (1-2 max per response)
+- when user tells to generate a report on company, navigate to the company page
 
 🚫 AVOID:
 - Raw JSON or unformatted tool outputs
@@ -606,10 +608,18 @@ def chat():
         # The last message in the result should be the agent's final response
         final_messages = result.get("messages", [])
         if final_messages:
-            # Get the last message content
+            # Get the last message content - extract only the text, not metadata
             last_message = final_messages[-1]
             if hasattr(last_message, 'content'):
-                bot_response = last_message.content
+                # Handle AIMessage with content attribute
+                content = last_message.content
+                # If content is a list (multimodal), extract text parts
+                if isinstance(content, list):
+                    text_parts = [item.get('text', '') if isinstance(item, dict) else str(item) 
+                                  for item in content if isinstance(item, dict) and item.get('type') == 'text']
+                    bot_response = ' '.join(text_parts).strip()
+                else:
+                    bot_response = str(content).strip()
             elif isinstance(last_message, dict):
                 bot_response = last_message.get('content', "I've processed your request.")
             else:
@@ -617,22 +627,27 @@ def chat():
         else:
             bot_response = "I've processed your request."
         
+        # Convert markdown to HTML for proper formatting on frontend
+        bot_response_html = markdown.markdown(bot_response, extensions=['nl2br', 'sane_lists'])
+        
         # Keep chat history for client-side display (memory is handled by checkpointer)
         if session_id not in chat_histories:
             chat_histories[session_id] = []
         
         chat_histories[session_id].append({"role": "user", "content": user_message})
-        chat_histories[session_id].append({"role": "assistant", "content": bot_response})
+        chat_histories[session_id].append({"role": "assistant", "content": bot_response_html})
         
         # Keep last 20 messages (10 exchanges) for display purposes
         if len(chat_histories[session_id]) > 20:
             chat_histories[session_id] = chat_histories[session_id][-20:]
         
-        logger.info(f"🤖 Responding: {bot_response}")
+        # Log response (truncate if too long to avoid console spam)
+        log_response = bot_response[:200] + "..." if len(bot_response) > 200 else bot_response
+        logger.info(f"🤖 Responding: {log_response}")
         
         return jsonify({
             'success': True,
-            'response': bot_response
+            'response': bot_response_html
         }), 200
         
     except Exception as e:

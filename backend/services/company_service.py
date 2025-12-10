@@ -9,6 +9,7 @@ import os
 import logging
 from typing import Dict, List, Any, Optional
 from llm_manager import get_llm
+import markdown
 
 logger = logging.getLogger(__name__)
 
@@ -108,7 +109,7 @@ class CompanyService:
         Returns:
             Dict with insights text
         """
-        if True:
+        try:
             company_data = self.get_company_details(ticker)
             
             if not company_data.get('success'):
@@ -126,81 +127,85 @@ class CompanyService:
             
             # Use LangChain + Tavily agent to generate insights with web search
             llm = get_llm()
-            tavily_api_key = os.getenv('TAVILY_API_KEY')
             
             logger.info(f"🔍 Creating Tavily search agent for {name}...")
-                    
-                    # Create Tavily search tool
+            
+            # Create Tavily search tool
             search = TavilySearchResults(
-                        max_results=10,           # Get more sources for analysis
-                        search_depth="advanced"   # Better for research queries
-                    )
-                    
-                    # Create agent with system prompt
-            from langchain_core.prompts import ChatPromptTemplate
-            from langchain import create_agent  # or hub.pull if using hub
+                max_results=10,           # Get more sources for analysis
+                search_depth="advanced"   # Better for research queries
+            )
+            
+            # Create agent with simple system prompt
+            system_prompt = f"""You are a sustainability analyst. Given company information, research and provide insights.
 
-            # Define prompt template with variables
-            prompt = ChatPromptTemplate.from_messages([
-                ("system", """You are a sustainability analyst. Given company information, research and provide insights.
+Company to analyze: {name} ({ticker})
+Industry: {industry}
+Current ESG Rating: {esg_rating}
+Green Innovation Score: {gii_score}/100
+Market Cap: {market_cap}
 
-            Company to analyze: {name} ({ticker})
-            Industry: {industry}
-            Current ESG Rating: {esg_rating}
-            Green Innovation Score: {gii_score}/100
-            Market Cap: {market_cap}
+Search online for basic information about what the company does.
+Look for anything related to the company's sustainability efforts, carbon reduction initiatives, net-zero goals, or involvement in carbon credits.
+Provide a short, clear summary based on publicly available information.
 
-            Search online for basic information about what the company does.
-            Look for anything related to the company's sustainability efforts, carbon reduction initiatives, net-zero goals, or involvement in carbon credits.
-            Provide a short, clear summary based on publicly available information.
+Output Format:
 
-            Output Format:
+OVERVIEW:
+1–2 sentence summary of what the company does.
 
-            OVERVIEW:
-            1–2 sentence summary of what the company does.
+SUSTAINABILITY POSITION:
+1–2 sentences on how the company aligns with sustainability, green initiatives, or carbon credit efforts.
 
-            SUSTAINABILITY POSITION:
-            1–2 sentences on how the company aligns with sustainability, green initiatives, or carbon credit efforts.
+Keep the response concise."""
 
-            Keep the response concise."""),
-                ("user", "{query}")
-            ])
-
-            # Create agent with prompt template
             agent = create_agent(
                 llm,
                 tools=[search],
-                system_prompt=prompt  # Now accepts {name}, {ticker}, etc. as variables
+                system_prompt=system_prompt
             )
 
-            # Run agent analysis - pass ALL variables
+            # Run agent analysis
             logger.info(f"🤖 Running agent for {name}...")
             result = agent.invoke({
-                "messages": [{"role": "user", "content": "Analyze this company"}],
-                "name": name,
-                "ticker": ticker,
-                "industry": industry,
-                "esg_rating": esg_rating,
-                "gii_score": gii_score,
-                "market_cap": market_cap,
-                "query": f"Research {name} ({ticker})"
+                "messages": [{"role": "user", "content": f"Research and analyze {name} ({ticker})"}]
             })
-
-            print(result["messages"][-1].content)
                                 
-                    # Extract the final response
-            insights_text = result["messages"][-1].content
+            # Extract the final response - handle multimodal content
+            last_message = result["messages"][-1]
+            if hasattr(last_message, 'content'):
+                content = last_message.content
+                # If content is a list (multimodal), extract only text parts
+                if isinstance(content, list):
+                    text_parts = [item.get('text', '') if isinstance(item, dict) else str(item) 
+                                  for item in content if isinstance(item, dict) and item.get('type') == 'text']
+                    insights_text = ' '.join(text_parts).strip()
+                else:
+                    insights_text = str(content).strip()
+            else:
+                insights_text = str(last_message)
+            
+            # Convert markdown to HTML for proper formatting
+            insights_html = markdown.markdown(insights_text, extensions=['nl2br', 'sane_lists'])
                     
             logger.info(f"✅ Agent insights generated for {name}")
                     
             return {
-                        'success': True,
-                        'data': {
-                            'ticker': ticker,
-                            'company_name': name,
-                            'insights': insights_text
-                        }
-                    }
+                'success': True,
+                'data': {
+                    'ticker': ticker,
+                    'company_name': name,
+                    'insights': insights_html
+                }
+            }
+        except Exception as e:
+            logger.error(f"Error generating insights for {ticker}: {e}")
+            import traceback
+            traceback.print_exc()
+            return {
+                'success': False,
+                'error': str(e)
+            }
                    
     
     # ============================================================================
@@ -234,50 +239,60 @@ class CompanyService:
         from services.news_rag_service import search_news
         from services.projects_rag_service import search_projects
         
+        # Store reference to avoid closure issues
+        get_details = self.get_company_details
+        
         # Define custom tools for the agent
         @tool
         def search_news_rag(query: str, k: int = 5) -> str:
             """Search carbon/ESG news articles using RAG. Returns relevant news chunks about sustainability, carbon markets, ESG trends."""
-            results = search_news(query, k=k)
-            if not results:
-                return "No news articles found."
-            
-            output = []
-            for i, chunk in enumerate(results, 1):
-                output.append(f"\n--- News {i} ---")
-                output.append(f"Title: {chunk['title']}")
-                output.append(f"Source: {chunk['source']}")
-                output.append(f"Link: {chunk['link']}")
-                output.append(f"Content: {chunk['content'][:300]}...")
-            return "\n".join(output)
+            try:
+                results = search_news(query, k=k)
+                if not results:
+                    return "No news articles found."
+                
+                output = []
+                for i, chunk in enumerate(results, 1):
+                    output.append(f"\n--- News {i} ---")
+                    output.append(f"Title: {chunk['title']}")
+                    output.append(f"Source: {chunk['source']}")
+                    output.append(f"Link: {chunk['link']}")
+                    output.append(f"Content: {chunk['content'][:300]}...")
+                return "\n".join(output)
+            except Exception as e:
+                return f"Error searching news: {str(e)}"
         
         @tool
         def search_projects_rag(query: str, k: int = 5) -> str:
             """Search carbon credit projects using RAG. Returns relevant projects about renewable energy, REDD+, carbon offsets, etc."""
-            results = search_projects(query, k=k)
-            if not results:
-                return "No projects found."
-            
-            output = []
-            for i, chunk in enumerate(results, 1):
-                output.append(f"\n--- Project {i} ---")
-                output.append(f"Name: {chunk['name']}")
-                output.append(f"Registry: {chunk['registry']}")
-                output.append(f"Country: {chunk['country']}")
-                output.append(f"Type: {chunk['type']}")
-                output.append(f"Link: {chunk['registry_link']}")
-                output.append(f"Content: {chunk['content'][:300]}...")
-            return "\n".join(output)
+            try:
+                results = search_projects(query, k=k)
+                if not results:
+                    return "No projects found."
+                
+                output = []
+                for i, chunk in enumerate(results, 1):
+                    output.append(f"\n--- Project {i} ---")
+                    output.append(f"Name: {chunk['name']}")
+                    output.append(f"Registry: {chunk['registry']}")
+                    output.append(f"Country: {chunk['country']}")
+                    output.append(f"Type: {chunk['type']}")
+                    output.append(f"Link: {chunk['registry_link']}")
+                    output.append(f"Content: {chunk['content'][:300]}...")
+                return "\n".join(output)
+            except Exception as e:
+                return f"Error searching projects: {str(e)}"
         
         @tool
-        def get_company_info(ticker: str) -> str:
+        def get_company_info(ticker_input: str) -> str:
             """Get detailed information about a company including stock price, ESG rating, GII score, industry, description."""
-            comp_data = self.get_company_details(ticker)
-            if not comp_data.get('success'):
-                return f"Company {ticker} not found."
-            
-            comp = comp_data['data']
-            info = f"""
+            try:
+                comp_data = get_details(ticker_input)
+                if not comp_data.get('success'):
+                    return f"Company {ticker_input} not found."
+                
+                comp = comp_data['data']
+                info = f"""
 Company: {comp.get('name', '')}
 Ticker: {comp.get('ticker', '')}
 Industry: {comp.get('industry', '')}
@@ -288,7 +303,9 @@ Green Innovation Index: {comp.get('gii_score', 0)}/100
 Description: {comp.get('description', '')}
 Website: {comp.get('website', '')}
 """
-            return info.strip()
+                return info.strip()
+            except Exception as e:
+                return f"Error getting company info: {str(e)}"
         
         # Create Tavily search tool
         search = TavilySearchResults(
@@ -329,8 +346,22 @@ If data is missing or unverified, state that clearly. Keep the output concise.""
             "messages": [{"role": "user", "content": f"Analyze the sustainability and future impact of {name} ({ticker_symbol}) in the {industry} industry. Provide comprehensive analysis covering environmental impact, regulatory compliance, carbon footprint, green initiatives, and future growth projections."}]
         })
         
-        # Extract response
-        analysis_text = result["messages"][-1].content
+        # Extract response - handle multimodal content
+        last_message = result["messages"][-1]
+        if hasattr(last_message, 'content'):
+            content = last_message.content
+            # If content is a list (multimodal), extract only text parts
+            if isinstance(content, list):
+                text_parts = [item.get('text', '') if isinstance(item, dict) else str(item) 
+                              for item in content if isinstance(item, dict) and item.get('type') == 'text']
+                analysis_text = ' '.join(text_parts).strip()
+            else:
+                analysis_text = str(content).strip()
+        else:
+            analysis_text = str(last_message)
+        
+        # Convert markdown to HTML for proper formatting
+        analysis_html = markdown.markdown(analysis_text, extensions=['nl2br', 'sane_lists'])
         
         logger.info(f"✅ Future impact analysis generated for {name}")
         
@@ -339,7 +370,7 @@ If data is missing or unverified, state that clearly. Keep the output concise.""
             'data': {
                 'ticker': ticker,
                 'company_name': name,
-                'analysis': analysis_text
+                'analysis': analysis_html
             }
         }
     
@@ -373,50 +404,60 @@ If data is missing or unverified, state that clearly. Keep the output concise.""
         from services.news_rag_service import search_news
         from services.projects_rag_service import search_projects
         
+        # Store reference to avoid closure issues
+        get_details = self.get_company_details
+        
         # Define custom tools for the agent (same as future impact)
         @tool
         def search_news_rag(query: str, k: int = 5) -> str:
             """Search carbon/ESG news articles using RAG. Returns relevant news chunks about sustainability, carbon markets, ESG trends."""
-            results = search_news(query, k=k)
-            if not results:
-                return "No news articles found."
-            
-            output = []
-            for i, chunk in enumerate(results, 1):
-                output.append(f"\n--- News {i} ---")
-                output.append(f"Title: {chunk['title']}")
-                output.append(f"Source: {chunk['source']}")
-                output.append(f"Link: {chunk['link']}")
-                output.append(f"Content: {chunk['content'][:300]}...")
-            return "\n".join(output)
+            try:
+                results = search_news(query, k=k)
+                if not results:
+                    return "No news articles found."
+                
+                output = []
+                for i, chunk in enumerate(results, 1):
+                    output.append(f"\n--- News {i} ---")
+                    output.append(f"Title: {chunk['title']}")
+                    output.append(f"Source: {chunk['source']}")
+                    output.append(f"Link: {chunk['link']}")
+                    output.append(f"Content: {chunk['content'][:300]}...")
+                return "\n".join(output)
+            except Exception as e:
+                return f"Error searching news: {str(e)}"
         
         @tool
         def search_projects_rag(query: str, k: int = 5) -> str:
             """Search carbon credit projects using RAG. Returns relevant projects about renewable energy, REDD+, carbon offsets, etc."""
-            results = search_projects(query, k=k)
-            if not results:
-                return "No projects found."
-            
-            output = []
-            for i, chunk in enumerate(results, 1):
-                output.append(f"\n--- Project {i} ---")
-                output.append(f"Name: {chunk['name']}")
-                output.append(f"Registry: {chunk['registry']}")
-                output.append(f"Country: {chunk['country']}")
-                output.append(f"Type: {chunk['type']}")
-                output.append(f"Link: {chunk['registry_link']}")
-                output.append(f"Content: {chunk['content'][:300]}...")
-            return "\n".join(output)
+            try:
+                results = search_projects(query, k=k)
+                if not results:
+                    return "No projects found."
+                
+                output = []
+                for i, chunk in enumerate(results, 1):
+                    output.append(f"\n--- Project {i} ---")
+                    output.append(f"Name: {chunk['name']}")
+                    output.append(f"Registry: {chunk['registry']}")
+                    output.append(f"Country: {chunk['country']}")
+                    output.append(f"Type: {chunk['type']}")
+                    output.append(f"Link: {chunk['registry_link']}")
+                    output.append(f"Content: {chunk['content'][:300]}...")
+                return "\n".join(output)
+            except Exception as e:
+                return f"Error searching projects: {str(e)}"
         
         @tool
-        def get_company_info(ticker: str) -> str:
+        def get_company_info(ticker_input: str) -> str:
             """Get detailed information about a company including stock price, ESG rating, GII score, industry, description."""
-            comp_data = self.get_company_details(ticker)
-            if not comp_data.get('success'):
-                return f"Company {ticker} not found."
-            
-            comp = comp_data['data']
-            info = f"""
+            try:
+                comp_data = get_details(ticker_input)
+                if not comp_data.get('success'):
+                    return f"Company {ticker_input} not found."
+                
+                comp = comp_data['data']
+                info = f"""
 Company: {comp.get('name', '')}
 Ticker: {comp.get('ticker', '')}
 Industry: {comp.get('industry', '')}
@@ -427,7 +468,9 @@ Green Innovation Index: {comp.get('gii_score', 0)}/100
 Description: {comp.get('description', '')}
 Website: {comp.get('website', '')}
 """
-            return info.strip()
+                return info.strip()
+            except Exception as e:
+                return f"Error getting company info: {str(e)}"
         
         # Create Tavily search tool
         search = TavilySearchResults(
@@ -453,10 +496,24 @@ Website: {comp.get('website', '')}
         agent = create_agent(
             model=llm,
             tools=tools,
-            system_prompt=f"""You are a Sustainability Insights Assistant AI Agent. You can chat freely with the user and assist with any custom request related to companies, sustainability, carbon markets, policy impacts, or stock implications. You have access to: (1) news RAG, (2) carbon-projects RAG, (3) internet search, and (4) company info.
-When the user asks for any analysis, data, or explanation, use the tools as needed. Always run broad queries first, using sector and product keywords (e.g., Tesla → EVs, batteries, cars, autonomy). Use each tool multiple times if the request requires deeper information.
-Provide clear, concise answers. If the user wants a report, summary, comparison, explanation, or insights, structure the response according to their request. If information is missing or unverified, state it. Keep responses accurate, helpful, and grounded in tool results.
-You may ask clarifying questions when necessary, but otherwise respond directly and assist with whatever the user needs.""",
+            system_prompt=f"""You are a Sustainability Insights Assistant AI Agent analyzing {name} ({ticker}), a company in the {industry} industry.
+
+CURRENT COMPANY CONTEXT:
+- Company: {name}
+- Ticker: {ticker}
+- Industry: {industry}
+
+You can chat freely with the user and assist with any custom request about THIS COMPANY related to sustainability, carbon markets, policy impacts, or stock implications. 
+
+You have access to: (1) news RAG, (2) carbon-projects RAG, (3) internet search, and (4) company info tool.
+
+When the user asks questions, they are asking about {name}. Use the get_company_info tool with ticker "{ticker}" to get current data about {name}.
+
+When researching, use broad queries with sector and product keywords (e.g., for Tesla → EVs, batteries, cars, autonomy). Use each tool multiple times if needed.
+
+Provide clear, concise answers. Structure responses according to the user's request. If information is missing or unverified, state it clearly. Keep responses accurate, helpful, and grounded in tool results.
+
+Remember: All questions are about {name} ({ticker}) unless the user explicitly asks about a different company.""",
             checkpointer=checkpointer,
             middleware=[message_limit_middleware]
         )
@@ -471,8 +528,22 @@ You may ask clarifying questions when necessary, but otherwise respond directly 
             config
         )
         
-        # Extract response
-        answer = result["messages"][-1].content
+        # Extract response - handle multimodal content
+        last_message = result["messages"][-1]
+        if hasattr(last_message, 'content'):
+            content = last_message.content
+            # If content is a list (multimodal), extract only text parts
+            if isinstance(content, list):
+                text_parts = [item.get('text', '') if isinstance(item, dict) else str(item) 
+                              for item in content if isinstance(item, dict) and item.get('type') == 'text']
+                answer = ' '.join(text_parts).strip()
+            else:
+                answer = str(content).strip()
+        else:
+            answer = str(last_message)
+        
+        # Convert markdown to HTML for proper formatting
+        answer_html = markdown.markdown(answer, extensions=['nl2br', 'sane_lists'])
         
         logger.info(f"✅ Chat response generated for {name}")
         
@@ -482,6 +553,6 @@ You may ask clarifying questions when necessary, but otherwise respond directly 
                 'ticker': ticker,
                 'company_name': name,
                 'query': query,
-                'answer': answer
+                'answer': answer_html
             }
         }
