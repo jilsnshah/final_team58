@@ -1,6 +1,6 @@
-# Carbon Intelligence Platform
+# EcoInvest - Carbon Intelligence & ESG Investment Platform
 
-A full-stack ESG and carbon market intelligence platform with real-time data scraping, AI-powered insights, and interactive dashboards.
+A full-stack ESG and carbon market intelligence platform with real-time data scraping, AI-powered insights, RAG-based search, and interactive dashboards.
 
 ## 🚀 Quick Start
 
@@ -8,6 +8,7 @@ A full-stack ESG and carbon market intelligence platform with real-time data scr
 
 - Docker & Docker Compose
 - Node.js 18+ (for frontend development)
+- Python 3.13+ (for backend development)
 - 8GB+ RAM recommended
 
 ### One-Command Startup
@@ -61,13 +62,44 @@ Frontend will be available at: http://localhost:5173
 - Company watchlist with ESG ratings
 - Market analytics and trends
 - Live data updates via WebSocket
+- **AI Chatbot** - Comprehensive assistant with multi-tool access
 
-### Company Reports
+### AI Chatbot (`/api/chat`)
 
-- AI-powered ESG insights
-- Personalized sustainability analysis
-- Future impact projections
-- Green Innovation Index scores
+Powered by **Google Gemini 2.0 Flash** with LangChain v1 agents:
+
+**Capabilities:**
+- 🔍 **RAG Search** - News & carbon projects vector search
+- 📊 **Company Analysis** - Multi-level insights (basic → insights → future impact)
+- 🌐 **Web Search** - Real-time internet search via Tavily
+- 📈 **Project Reports** - AI-generated carbon project analysis
+- 🧭 **Navigation** - Control frontend (theme, pages, watchlist)
+- 💬 **Conversation Memory** - Persistent chat history per session
+- ⚡ **Middleware** - Auto-trimming to 10 most recent messages
+
+**Tools Available:**
+- `search_carbon_news` - RAG search news articles
+- `search_carbon_projects` - RAG search carbon projects
+- `get_detailed_company_info` - Company details (stock, ESG, GII)
+- `get_company_insights` - AI sustainability insights
+- `get_company_future_impact` - Multi-agent future analysis
+- `get_project_details` - Carbon project information
+- `get_project_report` - AI project reports
+- `list_available_companies` - Browse database
+- `add_to_watchlist` / `remove_from_watchlist` - Manage watchlist
+- `go_to_company` / `go_to_projects` - Navigate pages
+- `change_theme` - Toggle dark/light mode
+
+### Company Reports (`/api/company/:ticker`)
+
+- **Basic Details** - Stock price, ESG rating, GII score
+- **AI Insights** - Sustainability analysis powered by Gemini
+- **Future Impact Analysis** - Multi-agent system using:
+  - News RAG search
+  - Projects RAG search  
+  - Internet search (Tavily)
+  - Company data lookup
+- **Custom Chat** - Ask anything about the company with conversation memory
 
 ### Projects Marketplace
 
@@ -85,6 +117,13 @@ cd backend
 
 # Install dependencies
 pip install -r requirements.txt
+
+# Configure environment
+cp .env.example .env
+# Edit .env with your API keys:
+# - GOOGLE_API_KEY (required for AI features)
+# - TAVILY_API_KEY (required for web search)
+# - NEWS_API_KEY (optional, for NewsAPI scraping)
 
 # Run locally (without Docker)
 python app.py
@@ -111,20 +150,34 @@ Create `.env` file in project root:
 # Backend API
 VITE_API_URL=http://localhost:5001
 VITE_WS_URL=http://localhost:5001
-
-# AI Keys
-GOOGLE_API_KEY=your_gemini_key_here
-NEWS_API_KEY=your_newsapi_key_here  # Get from newsapi.org
 ```
 
 Backend `.env` at `backend/.env`:
 
 ```env
+# Flask Configuration
 FLASK_ENV=development
 FLASK_PORT=5000
-GOOGLE_API_KEY=your_gemini_key_here
+
+# Database
+DB_HOST=localhost
+DB_PORT=5432
+DB_NAME=carbon_intel
+DB_USER=carbon
+DB_PASSWORD=carbonpw
+
+# AI/LLM (REQUIRED)
+GOOGLE_API_KEY=your_gemini_api_key_here
+TAVILY_API_KEY=your_tavily_api_key_here
+
+# Optional
 NEWS_API_KEY=your_newsapi_key_here
 ```
+
+**Get API Keys:**
+- Google Gemini: https://makersuite.google.com/app/apikey
+- Tavily Search: https://tavily.com/
+- NewsAPI: https://newsapi.org/
 
 ## 📦 Tech Stack
 
@@ -143,11 +196,23 @@ NEWS_API_KEY=your_newsapi_key_here
 - **Pathway** for RAG/Vector search
 - **Redis** for caching
 - **Kafka** for event streaming
-- **Google Gemini** for AI insights
+
+### AI/LLM Stack
+
+- **Google Gemini 2.0 Flash** - Primary LLM
+- **LangChain v1** - Agent framework
+- **LangGraph** - Agent orchestration with memory
+- **Tavily** - Web search tool
+- **FAISS** - Vector store for RAG
+- **HuggingFace Embeddings** - sentence-transformers/all-MiniLM-L6-v2
+- **RecursiveCharacterTextSplitter** - Text chunking (1000 chars, 200 overlap)
 
 ### Data Collection
 
 - **22 RSS feeds** (Google News)
+- **NewsAPI** integration
+- **Yahoo Finance** API
+- **Verra Registry** scraper
 - **NewsAPI** integration
 - **Yahoo Finance** API
 - **Verra Registry** scraper
@@ -242,6 +307,8 @@ curl http://localhost:5001/api/company/TSLA/insights | jq
 - **Scraper**: Updates every 2 minutes
 - **WebSocket**: Real-time updates every 10 seconds
 - **Cache**: Redis for sub-second response times
+- **RAG Search**: FAISS vector search with incremental updates
+- **AI Agents**: Multi-tool orchestration with LangGraph memory
 
 ## 🔐 Security Notes
 
@@ -249,9 +316,39 @@ curl http://localhost:5001/api/company/TSLA/insights | jq
 - Never commit API keys to git
 - Use environment variables for secrets
 - Enable CORS only for trusted domains
+- API keys required: GOOGLE_API_KEY, TAVILY_API_KEY
 
+## 🤖 AI Architecture
 
+### RAG Services (Incremental Updates)
 
+**News RAG** (`services/news_rag_service.py`):
+- Monitors `news.jsonl` for changes
+- Uses MD5 hashing (title|link|published) to track indexed articles
+- Only adds new articles to FAISS vector store
+- Background thread checks every 60 seconds
+- Returns: title, source, link, published, sentiment, content, score
 
+**Projects RAG** (`services/projects_rag_service.py`):
+- Monitors `projects.jsonl` for changes
+- Uses MD5 hashing (project_id|name|registry) to track indexed projects
+- Incremental FAISS updates only
+- Returns: name, registry, country, type, methodology, status, content, score
+
+### Agent Middleware
+
+**Message Limiting** (`@before_agent` decorator):
+- Automatically trims conversations to 10 most recent messages
+- Prevents token overflow
+- Applied to both aibot and company chat agents
+
+### LangChain v1 Migration
+
+Updated from v0 to v1 with:
+- `create_agent()` from `langchain.agents`
+- `@before_agent` middleware from `langchain.agents.middleware`
+- `MemorySaver` from `langgraph.checkpoint.memory`
+- `system_prompt` parameter instead of `prompt`
+- Thread-based memory via `config={"configurable": {"thread_id": "..."}}`
 
 ---
