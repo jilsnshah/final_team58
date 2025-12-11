@@ -2,10 +2,12 @@
 flask==3.0.0
 flask-cors==4.0.0
 flask-socketio==5.3.5
+werkzeug==3.0.1
 
 # WebSocket Support
 python-socketio==5.10.0
 eventlet==0.33.3
+simple-websocket==1.0.0
 
 # Environment Variables
 python-dotenv==1.0.0

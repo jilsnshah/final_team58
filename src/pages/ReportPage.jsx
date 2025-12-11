@@ -39,12 +39,15 @@ const ReportPage = () => {
   // Progress tracking state
   const [progressSteps, setProgressSteps] = React.useState([]);
   const [currentProgress, setCurrentProgress] = React.useState(null);
+  
+  // Ref to prevent double-fetching in React StrictMode
+  const hasFetched = React.useRef(false);
 
   // Setup WebSocket listener for progress updates
   React.useEffect(() => {
     const socket = api.initWebSocket();
     
-    api.onDataUpdate('report_progress', (data) => {
+    const progressHandler = (data) => {
       if (data.id === id) {
         setCurrentProgress(data.message);
         if (data.step) {
@@ -55,7 +58,9 @@ const ReportPage = () => {
           });
         }
       }
-    });
+    };
+    
+    api.onDataUpdate('report_progress', progressHandler);
     
     return () => {
       api.onDataUpdate('report_progress', null);
@@ -65,6 +70,10 @@ const ReportPage = () => {
   // Fetch data from backend
   React.useEffect(() => {
     const fetchData = async () => {
+      // Prevent double-fetch in React StrictMode (development only)
+      if (hasFetched.current) return;
+      hasFetched.current = true;
+      
       try {
         setLoading(true);
         setProgressSteps([]);
@@ -138,6 +147,11 @@ const ReportPage = () => {
     };
 
     fetchData();
+    
+    // Reset fetch flag when id changes
+    return () => {
+      hasFetched.current = false;
+    };
   }, [id]);
 
   const handleSendMessage = async () => {

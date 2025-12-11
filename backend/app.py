@@ -52,8 +52,17 @@ CORS(app, resources={r"/*": {"origins": cors_origins}})
 # Register blueprints
 app.register_blueprint(aibot_bp)
 
-# Initialize SocketIO
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
+# Initialize SocketIO with error suppression
+socketio = SocketIO(
+    app, 
+    cors_allowed_origins="*", 
+    async_mode='threading',
+    logger=False,  # Suppress socketio logs
+    engineio_logger=False,  # Suppress engine.io logs
+    ping_timeout=60,  # Increase timeout for slower connections
+    ping_interval=25,  # Send ping every 25 seconds
+    max_http_buffer_size=1e8  # Handle larger payloads
+)
 
 # Set socketio for frontend actions (enables AI chatbot to control frontend)
 frontend_actions.set_socketio(socketio)
@@ -438,6 +447,14 @@ if __name__ == '__main__':
     logger.info(f"🚀 Starting Carbon Intelligence Backend on port {port}")
     logger.info(f"📊 Debug mode: {debug}")
     logger.info(f"🌐 WebSocket support: Enabled")
-    logger.info(f"📡 Real-time updates: Every 10 seconds")
+    logger.info(f"📡 Real-time updates: On data changes")
     
-    socketio.run(app, host='0.0.0.0', port=port, debug=debug, use_reloader=False, allow_unsafe_werkzeug=True)
+    socketio.run(
+        app, 
+        host='0.0.0.0', 
+        port=port, 
+        debug=debug, 
+        use_reloader=False,
+        allow_unsafe_werkzeug=True,
+        log_output=debug  # Only show werkzeug logs in debug mode
+    )

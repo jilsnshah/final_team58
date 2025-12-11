@@ -2,6 +2,14 @@
 
 A full-stack ESG and carbon market intelligence platform with real-time data scraping, AI-powered insights, RAG-based search, and interactive dashboards.
 
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/jilsnshah/final_team58)
+
+## 📚 Documentation
+
+- [Deployment Guide](./DEPLOYMENT.md) - Complete deployment instructions for Vercel & cloud platforms
+- [API Documentation](#) - Backend API reference
+- [Architecture Overview](#architecture) - System design and data flow
+
 ## 🚀 Quick Start
 
 ### Prerequisites
@@ -310,13 +318,30 @@ curl http://localhost:5001/api/company/TSLA/insights | jq
 - **RAG Search**: FAISS vector search with incremental updates
 - **AI Agents**: Multi-tool orchestration with LangGraph memory
 
+## 🌐 Production Deployment
+
+**Frontend**: Deployed on Vercel (automatic deployments from `main` branch)
+**Backend**: Deploy on Railway, Render, or Heroku (see [DEPLOYMENT.md](./DEPLOYMENT.md))
+
+### Quick Deploy to Vercel
+
+1. Fork/clone this repository
+2. Push to your GitHub
+3. Import to Vercel
+4. Add environment variables:
+   - `VITE_API_URL` - Your backend URL
+   - `VITE_WS_URL` - Your backend WebSocket URL
+5. Deploy!
+
+See [complete deployment guide](./DEPLOYMENT.md) for backend options.
+
 ## 🔐 Security Notes
 
 - Change default PostgreSQL password in production
 - Never commit API keys to git
-- Use environment variables for secrets
+- Use environment variables for secrets (see `.env.example`)
 - Enable CORS only for trusted domains
-- API keys required: GOOGLE_API_KEY, TAVILY_API_KEY
+- API keys required: `GOOGLE_API_KEY`, `TAVILY_API_KEY`
 
 ## 🤖 AI Architecture
 
