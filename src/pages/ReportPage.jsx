@@ -193,10 +193,60 @@ const ReportPage = () => {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 flex items-center justify-center">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-16 w-16 border-b-2 border-green-500 mx-auto mb-4"></div>
-          <p className="text-slate-400">Loading report...</p>
+      <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 flex items-center justify-center p-4">
+        <div className="max-w-md w-full">
+          {/* Loading Header */}
+          <div className="text-center mb-8">
+            <div className="relative inline-flex items-center justify-center mb-6">
+              <div className="animate-spin rounded-full h-16 w-16 border-b-2 border-green-500"></div>
+              <Sparkles className="absolute w-6 h-6 text-green-400 animate-pulse" />
+            </div>
+            <h2 className="text-2xl font-bold text-green-400 mb-2">Loading Report</h2>
+            <p className="text-slate-400">Gathering comprehensive data...</p>
+          </div>
+
+          {/* Current Progress */}
+          {currentProgress && (
+            <div className="bg-slate-800/50 backdrop-blur-sm rounded-lg p-4 mb-4 border border-green-500/20">
+              <div className="flex items-center space-x-3">
+                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-green-400"></div>
+                <p className="text-green-400 font-medium">{currentProgress}</p>
+              </div>
+            </div>
+          )}
+
+          {/* Progress Steps */}
+          {progressSteps.length > 0 && (
+            <div className="space-y-3">
+              <h3 className="text-sm font-semibold text-slate-300 mb-3">Progress:</h3>
+              {progressSteps.map((step, index) => (
+                <div 
+                  key={index}
+                  className="flex items-start space-x-3 bg-slate-800/30 rounded-lg p-3 border border-slate-700/50 animate-slideIn"
+                  style={{ animationDelay: `${index * 100}ms` }}
+                >
+                  <div className="flex-shrink-0 mt-0.5">
+                    <div className="w-5 h-5 rounded-full bg-green-500/20 border-2 border-green-500 flex items-center justify-center">
+                      <div className="w-2 h-2 rounded-full bg-green-400"></div>
+                    </div>
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm text-slate-300">{step.message}</p>
+                    <p className="text-xs text-slate-500 mt-1">
+                      {new Date(step.timestamp).toLocaleTimeString()}
+                    </p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Loading Animation */}
+          <div className="mt-6 flex justify-center space-x-1">
+            <div className="w-2 h-2 bg-green-500 rounded-full animate-bounce"></div>
+            <div className="w-2 h-2 bg-green-500 rounded-full animate-bounce" style={{ animationDelay: '0.1s' }}></div>
+            <div className="w-2 h-2 bg-green-500 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></div>
+          </div>
         </div>
       </div>
     );
@@ -471,22 +521,55 @@ const ReportPage = () => {
               </h2>
               {reportLoading ? (
                 <div className="flex items-center justify-center py-12">
-                  <div className="text-center">
-                    <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-green-500 mx-auto mb-4"></div>
-                    <p className="text-slate-400 mb-4">Generating AI report...</p>
+                  <div className="text-center max-w-lg mx-auto">
+                    {/* Spinner */}
+                    <div className="relative inline-flex items-center justify-center mb-6">
+                      <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-green-500"></div>
+                      <Sparkles className="absolute w-5 h-5 text-green-400 animate-pulse" />
+                    </div>
+                    <p className="text-slate-300 text-lg font-medium mb-6">Generating AI Report...</p>
+                    
+                    {/* Current Progress */}
                     {currentProgress && (
-                      <div className="mt-6">
-                        <p className="text-green-400 font-medium mb-3">{currentProgress}</p>
-                        <div className="space-y-2 max-w-md mx-auto">
-                          {progressSteps.map((step, idx) => (
-                            <div key={idx} className="flex items-center gap-3 text-sm">
-                              <div className="w-2 h-2 bg-green-500 rounded-full flex-shrink-0"></div>
-                              <span className="text-slate-300 text-left">{step.message}</span>
-                            </div>
-                          ))}
+                      <div className="bg-slate-800/50 backdrop-blur-sm rounded-lg p-4 mb-4 border border-green-500/20">
+                        <div className="flex items-center justify-center space-x-3">
+                          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-green-400"></div>
+                          <p className="text-green-400 font-medium">{currentProgress}</p>
                         </div>
                       </div>
                     )}
+                    
+                    {/* Progress Steps */}
+                    {progressSteps.length > 0 && (
+                      <div className="space-y-2 text-left">
+                        <h3 className="text-sm font-semibold text-slate-300 mb-3 text-center">Progress:</h3>
+                        {progressSteps.map((step, idx) => (
+                          <div 
+                            key={idx} 
+                            className="flex items-start gap-3 bg-slate-800/30 rounded-lg p-3 border border-slate-700/50"
+                          >
+                            <div className="flex-shrink-0 mt-0.5">
+                              <div className="w-5 h-5 rounded-full bg-green-500/20 border-2 border-green-500 flex items-center justify-center">
+                                <div className="w-2 h-2 rounded-full bg-green-400"></div>
+                              </div>
+                            </div>
+                            <div className="flex-1">
+                              <span className="text-sm text-slate-300">{step.message}</span>
+                              <p className="text-xs text-slate-500 mt-1">
+                                {new Date(step.timestamp).toLocaleTimeString()}
+                              </p>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    
+                    {/* Loading Animation */}
+                    <div className="mt-6 flex justify-center space-x-1">
+                      <div className="w-2 h-2 bg-green-500 rounded-full animate-bounce"></div>
+                      <div className="w-2 h-2 bg-green-500 rounded-full animate-bounce" style={{ animationDelay: '0.1s' }}></div>
+                      <div className="w-2 h-2 bg-green-500 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></div>
+                    </div>
                   </div>
                 </div>
               ) : projectReport ? (

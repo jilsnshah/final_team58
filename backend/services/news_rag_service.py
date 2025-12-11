@@ -70,10 +70,23 @@ class NewsRAGService:
         # Initialize embeddings model
         print("📥 Loading HuggingFace embedding model...")
         logger.info("🚀 Loading embedding model...")
+        
+        import torch
+        # Prevent meta tensor initialization issues
+        torch.set_default_dtype(torch.float32)
+        
         self.embeddings = HuggingFaceEmbeddings(
             model_name="sentence-transformers/all-MiniLM-L6-v2",
-            model_kwargs={'device': 'cpu'},
-            encode_kwargs={'normalize_embeddings': True}
+            model_kwargs={
+                'device': 'cpu',
+                'trust_remote_code': False
+            },
+            encode_kwargs={
+                'normalize_embeddings': True,
+                'batch_size': 32
+            },
+            cache_folder=None,  # Use default HuggingFace cache
+            multi_process=False
         )
         print("   ✓ Embedding model loaded: sentence-transformers/all-MiniLM-L6-v2")
         logger.info("✅ Embedding model loaded")
@@ -208,6 +221,11 @@ class NewsRAGService:
             try:
                 print(f"📂 Found existing vector store at: {self.vector_store_path}")
                 logger.info("📂 Loading existing vector store...")
+                
+                # Set PyTorch to use float32 to avoid meta tensor issues
+                import torch
+                torch.set_default_dtype(torch.float32)
+                
                 self.vector_store = FAISS.load_local(
                     str(self.vector_store_path),
                     self.embeddings,
@@ -222,7 +240,15 @@ class NewsRAGService:
             except Exception as e:
                 logger.warning(f"⚠️ Failed to load vector store: {e}")
                 print(f"   ⚠️ Failed to load: {e}")
-                print("   Will build from scratch...")
+                print("   Will rebuild from scratch...")
+                # Clean up corrupted vector store
+                try:
+                    import shutil
+                    if self.vector_store_path.exists():
+                        shutil.rmtree(self.vector_store_path)
+                        print("   Cleaned up corrupted vector store")
+                except Exception as cleanup_err:
+                    logger.warning(f"Could not clean up: {cleanup_err}")
         else:
             print(f"   No existing vector store found")
         

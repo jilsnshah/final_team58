@@ -1,6 +1,6 @@
 import React from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { Plus, ExternalLink, Trash2, X } from "lucide-react";
+import { Plus, ExternalLink, Trash2, X, Sparkles } from "lucide-react";
 import DashboardChatSidebar from "../components/DashboardChatSidebar";
 import { ThemeContext } from "../context/ThemeContext";
 import Fuse from "fuse.js";
@@ -17,6 +17,10 @@ const Dashboard = () => {
   const [lastUpdate, setLastUpdate] = React.useState(null);
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState(null);
+  
+  // Progress tracking state
+  const [loadingSteps, setLoadingSteps] = React.useState([]);
+  const [currentLoadingStep, setCurrentLoadingStep] = React.useState(null);
 
   // Initialize watchlist from localStorage (moved here before useEffect)
   const [watchlist, setWatchlist] = React.useState(() => {
@@ -34,10 +38,27 @@ const Dashboard = () => {
     const fetchData = async () => {
       try {
         setLoading(true);
+        setLoadingSteps([]);
+        
+        // Step 1: Fetching companies
+        setCurrentLoadingStep('Loading company data...');
+        setLoadingSteps([{ step: 1, message: 'Fetching companies...', timestamp: Date.now() }]);
+        const companiesPromise = api.getCompanies();
+        
+        // Step 2: Fetching news
+        setCurrentLoadingStep('Loading latest news...');
+        setLoadingSteps(prev => [...prev, { step: 2, message: 'Fetching news articles...', timestamp: Date.now() }]);
+        const newsPromise = api.getNews(350);
+        
+        // Step 3: Fetching analytics
+        setCurrentLoadingStep('Loading analytics...');
+        setLoadingSteps(prev => [...prev, { step: 3, message: 'Analyzing market data...', timestamp: Date.now() }]);
+        const analyticsPromise = api.getAnalytics();
+        
         const [companiesData, newsData, analyticsData] = await Promise.all([
-          api.getCompanies(),
-          api.getNews(350), // Fetch all news
-          api.getAnalytics(),
+          companiesPromise,
+          newsPromise,
+          analyticsPromise,
         ]);
         setAllCompanies(companiesData || []);
         console.log("✅ Companies loaded:", companiesData?.length, "companies");
@@ -58,12 +79,17 @@ const Dashboard = () => {
         console.log("📊 Projects metrics:", analyticsData?.projects);
         setAnalytics(analyticsData);
         setError(null);
+        
+        // Final step
+        setLoadingSteps(prev => [...prev, { step: 4, message: 'Dashboard ready!', timestamp: Date.now() }]);
+        setCurrentLoadingStep(null);
       } catch (err) {
         console.error("Error fetching data:", err);
         setError("Failed to load data. Please check if backend is running.");
         // Fallback to empty arrays
         setAllCompanies([]);
         setNews([]);
+        setCurrentLoadingStep(null);
       } finally {
         setLoading(false);
       }
@@ -432,14 +458,82 @@ const Dashboard = () => {
     >
       {/* Loading State */}
       {loading && (
-        <div className="flex items-center justify-center min-h-screen">
-          <div className="text-center">
-            <div className="animate-spin rounded-full h-16 w-16 border-b-2 border-green-500 mx-auto mb-4"></div>
-            <p
-              className={theme === "dark" ? "text-slate-400" : "text-gray-600"}
-            >
-              Loading dashboard data...
-            </p>
+        <div className="flex items-center justify-center min-h-screen p-4">
+          <div className="max-w-md w-full">
+            {/* Loading Header */}
+            <div className="text-center mb-8">
+              <div className="relative inline-flex items-center justify-center mb-6">
+                <div className="animate-spin rounded-full h-16 w-16 border-b-2 border-green-500"></div>
+                <Sparkles className="absolute w-6 h-6 text-green-400 animate-pulse" />
+              </div>
+              <h2 className={`text-2xl font-bold text-green-400 mb-2`}>
+                Loading Dashboard
+              </h2>
+              <p className={theme === "dark" ? "text-slate-400" : "text-gray-600"}>
+                Setting up your ESG intelligence platform...
+              </p>
+            </div>
+
+            {/* Current Progress */}
+            {currentLoadingStep && (
+              <div className={`backdrop-blur-sm rounded-lg p-4 mb-4 border ${
+                theme === "dark" 
+                  ? "bg-slate-800/50 border-green-500/20" 
+                  : "bg-white/80 border-green-500/30"
+              }`}>
+                <div className="flex items-center space-x-3">
+                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-green-400"></div>
+                  <p className="text-green-400 font-medium">{currentLoadingStep}</p>
+                </div>
+              </div>
+            )}
+
+            {/* Progress Steps */}
+            {loadingSteps.length > 0 && (
+              <div className="space-y-3">
+                <h3 className={`text-sm font-semibold mb-3 ${
+                  theme === "dark" ? "text-slate-300" : "text-gray-700"
+                }`}>
+                  Progress:
+                </h3>
+                {loadingSteps.map((step, index) => (
+                  <div 
+                    key={index}
+                    className={`flex items-start space-x-3 rounded-lg p-3 border animate-slideIn ${
+                      theme === "dark" 
+                        ? "bg-slate-800/30 border-slate-700/50" 
+                        : "bg-white/50 border-gray-300/50"
+                    }`}
+                    style={{ animationDelay: `${index * 100}ms` }}
+                  >
+                    <div className="flex-shrink-0 mt-0.5">
+                      <div className="w-5 h-5 rounded-full bg-green-500/20 border-2 border-green-500 flex items-center justify-center">
+                        <div className="w-2 h-2 rounded-full bg-green-400"></div>
+                      </div>
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className={`text-sm ${
+                        theme === "dark" ? "text-slate-300" : "text-gray-700"
+                      }`}>
+                        {step.message}
+                      </p>
+                      <p className={`text-xs mt-1 ${
+                        theme === "dark" ? "text-slate-500" : "text-gray-500"
+                      }`}>
+                        {new Date(step.timestamp).toLocaleTimeString()}
+                      </p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Loading Animation */}
+            <div className="mt-6 flex justify-center space-x-1">
+              <div className="w-2 h-2 bg-green-500 rounded-full animate-bounce"></div>
+              <div className="w-2 h-2 bg-green-500 rounded-full animate-bounce" style={{ animationDelay: '0.1s' }}></div>
+              <div className="w-2 h-2 bg-green-500 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></div>
+            </div>
           </div>
         </div>
       )}

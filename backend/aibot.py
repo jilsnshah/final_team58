@@ -187,14 +187,11 @@ def get_watchlist() -> str:
         A formatted list of companies currently in the user's watchlist with their details
     """
     try:
-        # Request latest watchlist from frontend
-        frontend_actions.request_watchlist()
-        
         # Get current watchlist state
         watchlist = frontend_actions.get_current_watchlist()
         
         if not watchlist:
-            return "Your watchlist is currently empty. Add companies using add_to_watchlist tool."
+            return "Watchlist is empty (0 companies)."
         
         output = [f"Your watchlist ({len(watchlist)} companies):\n"]
         for i, company in enumerate(watchlist, 1):

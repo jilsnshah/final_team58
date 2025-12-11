@@ -72,6 +72,53 @@ COMPANY_INFO = {
     }
 }
 
+def fetch_esg_from_yahoo(ticker):
+    """Fetch ESG scores from Yahoo Finance API"""
+    try:
+        # Yahoo Finance sustainability endpoint
+        url = f'https://query2.finance.yahoo.com/v1/finance/esgChart?symbol={ticker}'
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
+        }
+        response = requests.get(url, headers=headers, timeout=10)
+        
+        if response.status_code == 200:
+            data = response.json()
+            esg_chart = data.get('esgChart', {})
+            result = esg_chart.get('result', [])
+            
+            if result:
+                symbol_data = result[0]
+                esg_scores = symbol_data.get('esgScores', {})
+                
+                # Get the total ESG score
+                total_esg = esg_scores.get('totalEsg')
+                
+                if total_esg is not None:
+                    # Convert ESG score (0-100) to letter rating
+                    # Yahoo ESG: Lower is better (0-10 best, 40+ worst)
+                    if total_esg < 10:
+                        rating = 'A+'
+                    elif total_esg < 20:
+                        rating = 'A'
+                    elif total_esg < 30:
+                        rating = 'B+'
+                    elif total_esg < 40:
+                        rating = 'B'
+                    else:
+                        rating = 'C'
+                    
+                    return {
+                        'esg_rating': rating,
+                        'esg_score': total_esg,
+                        'environment_score': esg_scores.get('environmentScore'),
+                        'social_score': esg_scores.get('socialScore'),
+                        'governance_score': esg_scores.get('governanceScore')
+                    }
+    except Exception as e:
+        print(f"Yahoo ESG API error for {ticker}: {e}")
+    return None
+
 def fetch_from_yahoo_query(ticker):
     """Fetch from Yahoo Finance Query API (no library, direct HTTP)"""
     try:
@@ -147,7 +194,7 @@ def fetch_stock_data(ticker):
     print(f"❌ {ticker}: All APIs failed")
     return None
 
-def store_finance_data(cursor, ticker, price_data):
+def store_finance_data(cursor, ticker, price_data, esg_data=None):
     """Store finance data in database"""
     info = COMPANY_INFO.get(ticker, {})
     
@@ -155,9 +202,13 @@ def store_finance_data(cursor, ticker, price_data):
     change_pct = price_data['change_percent']
     gii_score = max(0, min(100, 50 + change_pct * 2))  # Scale to 0-100
     
-    # ESG rating (example - in reality would come from separate API)
-    esg_ratings = ['A+', 'A', 'A-', 'B+', 'B']
-    esg_rating = random.choice(esg_ratings)
+    # Use real ESG rating from API or fallback to default
+    if esg_data and esg_data.get('esg_rating'):
+        esg_rating = esg_data['esg_rating']
+        print(f"   📊 ESG: {esg_rating} (Score: {esg_data.get('esg_score', 'N/A')})")
+    else:
+        esg_rating = 'B'  # Default rating if ESG data unavailable
+        print(f"   ⚠️  ESG: Using default rating (API data unavailable)")
     
     cursor.execute("""
         INSERT INTO finance (
@@ -221,11 +272,15 @@ def run_finance_scraper(conn=None, tickers=None):
         print(f"\n[{idx}/{len(tickers)}] {ticker}")
         
         try:
-            # Fetch data
+            # Fetch price data
             price_data = fetch_stock_data(ticker)
             
             if price_data:
-                store_finance_data(cursor, ticker, price_data)
+                # Fetch ESG data
+                esg_data = fetch_esg_from_yahoo(ticker)
+                
+                # Store combined data
+                store_finance_data(cursor, ticker, price_data, esg_data)
                 conn.commit()
                 successful += 1
             else:
