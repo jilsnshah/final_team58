@@ -29,13 +29,14 @@ from services.project_report_service import ProjectReportService
 from aibot import aibot_bp, set_pathway_reader, set_company_service, set_project_service, set_projects_service, set_live_news_service
 import frontend_actions
 
-# Import News RAG service for vector store initialization
+# Import RAG services for vector store initialization
 try:
     from services.news_rag_service import get_news_rag_service
-    NEWS_RAG_AVAILABLE = True
+    from services.projects_rag_service import get_projects_rag_service
+    RAG_AVAILABLE = True
 except ImportError as e:
-    NEWS_RAG_AVAILABLE = False
-    print(f"⚠️ News RAG service not available: {e}")
+    RAG_AVAILABLE = False
+    print(f"⚠️ RAG services not available: {e}")
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -80,11 +81,34 @@ set_project_service(project_report_service)
 set_projects_service(projects_service)
 set_live_news_service(live_news_service)
 
-# News RAG service will be lazy-loaded on first use (not at startup)
-if NEWS_RAG_AVAILABLE:
-    logger.info("✅ News RAG Service available (will load on first use)")
+# Initialize RAG services at startup
+if RAG_AVAILABLE:
+    logger.info("📚 Initializing RAG services...")
+    print("\n" + "="*70)
+    print("📚 INITIALIZING RAG VECTOR STORES")
+    print("="*70)
+    
+    # Initialize News RAG
+    logger.info("📰 Initializing News RAG Service...")
+    news_rag = get_news_rag_service()
+    if news_rag:
+        logger.info("✅ News RAG Service initialized")
+    else:
+        logger.warning("⚠️ News RAG Service failed to initialize")
+    
+    # Initialize Projects RAG
+    logger.info("🌍 Initializing Projects RAG Service...")
+    projects_rag = get_projects_rag_service()
+    if projects_rag:
+        logger.info("✅ Projects RAG Service initialized")
+    else:
+        logger.warning("⚠️ Projects RAG Service failed to initialize")
+    
+    print("="*70)
+    print("✅ RAG SERVICES READY")
+    print("="*70 + "\n")
 else:
-    logger.warning("⚠️ News RAG Service not available - install langchain-community, faiss-cpu, sentence-transformers")
+    logger.warning("⚠️ RAG Services not available - install langchain-community, faiss-cpu, sentence-transformers")
 
 logger.info("✅ All services initialized!")
 

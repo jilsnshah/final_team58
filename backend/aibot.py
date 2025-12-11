@@ -596,7 +596,7 @@ You're an expert guide helping users navigate sustainability investments, ESG an
 - **For AI-generated project reports**: Navigate to the project's detail page using go_to_detail_page with project ID
 
 **RAG-Powered Search (Real Data):**
-- search_carbon_news - Search latest ESG/carbon/sustainability news articles with sources
+- search_carbon_news - Search latest ESG/carbon/sustainability news articles with sources and custom query always use this first if no information is found then only use web search tool
 - search_carbon_projects - Search carbon offset projects (renewable energy, REDD+, etc.)
 
 **Live News Feed:**
@@ -604,7 +604,7 @@ You're an expert guide helping users navigate sustainability investments, ESG an
 - get_news_by_sentiment - Filter news by sentiment (Positive/Negative/Neutral)
 
 **Web Search:**
-- search_web - Search the internet for current information, trends, and real-time data
+- search_web - Search the internet for current information, trends, and real-time data only when needed
 
 **Platform Navigation:**
 - go_to_detail_page - Navigate to company OR project detail pages (auto-detects type, or specify 'company'/'project')

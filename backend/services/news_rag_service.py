@@ -15,6 +15,8 @@ import json
 import logging
 import threading
 import time
+import hashlib
+import re
 from pathlib import Path
 from typing import List, Dict, Optional
 
@@ -232,10 +234,9 @@ class NewsRAGService:
                     allow_dangerous_deserialization=True
                 )
                 print(f"   ✓ Vector store loaded successfully")
+                print(f"   📊 Total indexed articles: {len(self.indexed_ids)}")
                 logger.info("✅ Vector store loaded")
-                # Check for new articles and add them incrementally
-                print("🔄 Checking for new articles...")
-                self._add_new_articles()
+                # Don't check for new articles here - let the watch thread handle it
                 return
             except Exception as e:
                 logger.warning(f"⚠️ Failed to load vector store: {e}")
@@ -400,10 +401,12 @@ class NewsRAGService:
         # Perform similarity search
         results = self.vector_store.similarity_search_with_score(query, k=k)
         
+        logger.info(f"🔍 News RAG Search '{query}': found {len(results)} chunks")
+        
         # Format results
         chunks = []
-        for doc, score in results:
-            chunks.append({
+        for i, (doc, score) in enumerate(results):
+            chunk_data = {
                 'content': doc.page_content,
                 'title': doc.metadata.get('title', ''),
                 'source': doc.metadata.get('source', 'Unknown'),
@@ -412,7 +415,13 @@ class NewsRAGService:
                 'sentiment': doc.metadata.get('sentiment', 'Neutral'),
                 'metadata': doc.metadata,
                 'score': float(score)
-            })
+            }
+            chunks.append(chunk_data)
+            
+            # Log each chunk for debugging
+            chunk_title = chunk_data['title']
+            chunk_source = chunk_data['source']
+            logger.info(f"   Chunk {i+1}: Source={chunk_source}, Title={chunk_title[:50] if chunk_title else 'N/A'}...")
         
         return chunks
 

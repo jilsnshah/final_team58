@@ -169,10 +169,14 @@ services:
     restart: always
 
   backend:
-    build: ../.
+    build:
+      context: ../
+      dockerfile: Dockerfile
     container_name: carbon_backend
     depends_on:
       carbon_pathway:
+        condition: service_healthy
+      postgres:
         condition: service_healthy
     ports:
       - "5001:5000"
@@ -183,6 +187,9 @@ services:
       FLASK_ENV: "production"
       PORT: "5000"
       PATHWAY_OUTPUT_DIR: "/app/carbon-intelligence/server/output"
+      GOOGLE_API_KEY: "${GOOGLE_API_KEY}"
+    env_file:
+      - ../.env
     restart: always
 
 volumes:
