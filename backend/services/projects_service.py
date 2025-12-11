@@ -7,6 +7,7 @@ Endpoints: GET /api/projects, POST /api/projects/search
 
 import logging
 from typing import Dict, List, Any, Optional
+from services.projects_rag_service import search_projects as rag_search_projects
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +64,7 @@ class ProjectsService:
     
     def search_projects(self, query: str, limit: int = 100) -> Dict[str, Any]:
         """
-        Semantic search for carbon projects
+        Semantic search for carbon projects using RAG
         
         Args:
             query: Search query string
@@ -73,6 +74,63 @@ class ProjectsService:
             Dict with search results
         """
         try:
+            # Use RAG service for semantic search
+            # Request 3x more chunks than needed because multiple chunks can belong to same project
+            rag_results = rag_search_projects(query, k=min(limit * 30, 50))
+            
+            # If RAG service returns results, use them
+            if rag_results:
+                logger.info(f"🔍 RAG Search '{query}': found {len(rag_results)} chunks")
+                
+                # Debug: Log all chunk IDs
+                for i, chunk in enumerate(rag_results):
+                    chunk_id = chunk.get('id') or chunk.get('metadata', {}).get('id')
+                    chunk_name = chunk.get('name') or chunk.get('metadata', {}).get('name')
+                    logger.info(f"   Chunk {i+1}: ID={chunk_id}, Name={chunk_name[:50] if chunk_name else 'N/A'}...")
+                
+                # Extract unique project IDs from RAG chunks
+                project_ids = set()
+                for chunk in rag_results:
+                    # Try multiple ID fields - RAG stores both 'id' and 'project_id' in metadata
+                    project_id = (
+                        chunk.get('id') or 
+                        chunk.get('metadata', {}).get('id') or
+                        chunk.get('metadata', {}).get('project_id')
+                    )
+                    if project_id:
+                        project_ids.add(project_id)
+                
+                logger.info(f"📋 Extracted {len(project_ids)} unique project IDs: {list(project_ids)[:5]}...")
+                
+                # Get full project data for matched IDs
+                all_projects = self.pathway_reader.get_projects(limit=5000)
+                
+                # Match by project_id field in pathway reader data
+                matched_projects = [
+                    p for p in all_projects 
+                    if p.get('project_id') in project_ids or p.get('id') in project_ids
+                ]
+                
+                logger.info(f"✅ Matched {len(matched_projects)} full projects from pathway reader")
+                
+                # Ensure frontend compatibility
+                formatted_results = []
+                for p in matched_projects[:limit]:
+                    project_data = dict(p)
+                    project_data['id'] = p.get('project_id', '')
+                    project_data['name'] = p.get('project_name', '')
+                    formatted_results.append(project_data)
+                
+                return {
+                    'success': True,
+                    'query': query,
+                    'count': len(formatted_results),
+                    'data': formatted_results,
+                    'method': 'rag'
+                }
+            
+            # Fallback to simple text search if RAG fails
+            logger.warning("⚠️ RAG search failed, falling back to simple search")
             results = self.pathway_reader.search_projects(query=query, limit=limit)
             
             # Ensure frontend compatibility
@@ -83,12 +141,13 @@ class ProjectsService:
                 project_data['name'] = p.get('project_name', '')
                 formatted_results.append(project_data)
             
-            logger.info(f"🔍 Search '{query}': found {len(formatted_results)} projects")
+            logger.info(f"🔍 Fallback Search '{query}': found {len(formatted_results)} projects")
             return {
                 'success': True,
                 'query': query,
                 'count': len(formatted_results),
-                'data': formatted_results
+                'data': formatted_results,
+                'method': 'fallback'
             }
         except Exception as e:
             logger.error(f"Error searching projects: {e}")

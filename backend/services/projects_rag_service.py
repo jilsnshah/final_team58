@@ -161,9 +161,10 @@ class ProjectsRAGService:
         for project in projects:
             project_id = self._get_project_id(project)
             
-            # Extract text content
-            name = project.get('name', '').strip()
+            # Extract text content - use correct field names from JSONL
+            name = project.get('project_name') or project.get('name', '').strip()
             description = project.get('description', '').strip()
+            actual_project_id = project.get('project_id', '')  # The real ID from data
             
             # Clean HTML tags if any
             import re
@@ -189,7 +190,8 @@ class ProjectsRAGService:
                 'status': status,
                 'registry_link': registry_link,
                 'project_id': project_id,
-                'id': project.get('id', '')
+                # Store the actual project ID from the original data
+                'id': actual_project_id
             }
             
             # Split into chunks

@@ -26,7 +26,7 @@ from services.projects_service import ProjectsService
 from services.analytics_service import AnalyticsService
 from services.company_service import CompanyService
 from services.project_report_service import ProjectReportService
-from aibot import aibot_bp, set_pathway_reader, set_company_service, set_project_service
+from aibot import aibot_bp, set_pathway_reader, set_company_service, set_project_service, set_projects_service, set_live_news_service
 import frontend_actions
 
 # Import News RAG service for vector store initialization
@@ -77,6 +77,8 @@ set_pathway_reader(pathway_reader)
 # Connect services to aibot for comprehensive tool access
 set_company_service(company_service)
 set_project_service(project_report_service)
+set_projects_service(projects_service)
+set_live_news_service(live_news_service)
 
 # News RAG service will be lazy-loaded on first use (not at startup)
 if NEWS_RAG_AVAILABLE:
@@ -124,6 +126,16 @@ def handle_data_request(data):
     except Exception as e:
         logger.error(f"Error handling data request: {e}")
         emit('error', {'error': str(e)})
+
+@socketio.on('watchlist_update')
+def handle_watchlist_update(data):
+    """Receive watchlist updates from frontend"""
+    try:
+        watchlist = data.get('watchlist', [])
+        frontend_actions.update_watchlist_state(watchlist)
+        logger.info(f"📋 Received watchlist update: {len(watchlist)} companies")
+    except Exception as e:
+        logger.error(f"Error handling watchlist update: {e}")
 
 # Background data pusher - broadcasts on data changes
 def background_data_pusher():

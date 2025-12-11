@@ -1,6 +1,6 @@
 import React from "react";
 import { Bot, Send, Sparkles } from "lucide-react";
-import { ThemeContext } from "../App";
+import { ThemeContext } from "../context/ThemeContext";
 import ReactMarkdown from "react-markdown";
 import * as api from "../services/api";
 

@@ -108,6 +108,14 @@ export const initWebSocket = () => {
     }
   });
 
+  // Report generation progress events
+  socket.on("report_progress", (data) => {
+    console.log("📊 Report progress:", data);
+    if (socketCallbacks.report_progress) {
+      socketCallbacks.report_progress(data);
+    }
+  });
+
   return socket;
 };
 

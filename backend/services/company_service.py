@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 try:
     from langchain_core.prompts import ChatPromptTemplate
     from langchain_core.output_parsers import StrOutputParser
-    from langchain_community.tools.tavily_search import TavilySearchResults
+    from langchain_tavily import TavilySearch
     from langchain.agents import create_agent
     from langchain.agents.middleware import before_agent
     from langchain_core.tools import tool
@@ -131,9 +131,8 @@ class CompanyService:
             logger.info(f"🔍 Creating Tavily search agent for {name}...")
             
             # Create Tavily search tool
-            search = TavilySearchResults(
-                max_results=10,           # Get more sources for analysis
-                search_depth="advanced"   # Better for research queries
+            search = TavilySearch(
+                max_results=10           # Get more sources for analysis
             )
             
             # Create agent with simple system prompt
@@ -308,9 +307,8 @@ Website: {comp.get('website', '')}
                 return f"Error getting company info: {str(e)}"
         
         # Create Tavily search tool
-        search = TavilySearchResults(
-            max_results=10,
-            search_depth="advanced"
+        search = TavilySearch(
+            max_results=10
         )
         
         # Create agent with all tools
@@ -473,9 +471,8 @@ Website: {comp.get('website', '')}
                 return f"Error getting company info: {str(e)}"
         
         # Create Tavily search tool
-        search = TavilySearchResults(
-            max_results=10,
-            search_depth="advanced"
+        search = TavilySearch(
+            max_results=10
         )
         
         # Create agent with all tools and built-in memory

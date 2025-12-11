@@ -19,6 +19,7 @@ const ProjectsPage = () => {
   const [projects, setProjects] = React.useState([]);
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState(null);
+  const [displayedCount, setDisplayedCount] = React.useState(100); // Show 100 initially
 
   // Fetch projects from backend on mount
   React.useEffect(() => {
@@ -125,6 +126,22 @@ const ProjectsPage = () => {
       : (Array.isArray(projects) ? projects : []).filter(
           (p) => p.category === selectedCategory
         );
+
+  // Only show limited number of projects
+  const displayedProjects = Array.isArray(filteredProjects) 
+    ? filteredProjects.slice(0, displayedCount) 
+    : [];
+  
+  const hasMore = Array.isArray(filteredProjects) && filteredProjects.length > displayedCount;
+
+  const loadMore = () => {
+    setDisplayedCount(prev => prev + 100);
+  };
+
+  // Reset displayed count when category changes
+  React.useEffect(() => {
+    setDisplayedCount(100);
+  }, [selectedCategory]);
 
   const getCategoryColor = (category) => {
     const colors = {
@@ -328,8 +345,7 @@ const ProjectsPage = () => {
 
             {/* Projects Grid */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {Array.isArray(filteredProjects) &&
-                filteredProjects.map((project, idx) => (
+              {displayedProjects.map((project, idx) => (
                   <div
                     key={project.id}
                     className="bg-gradient-to-br from-slate-900/95 via-slate-800/95 to-slate-900/95 backdrop-blur-xl rounded-2xl shadow-2xl hover:shadow-green-500/20 transition-all overflow-hidden border border-green-500/20 hover:border-green-400/50 group animate-slideIn"
@@ -412,6 +428,25 @@ const ProjectsPage = () => {
                     </div>
                   </div>
                 ))}
+            </div>
+
+            {/* Load More Button */}
+            {hasMore && (
+              <div className="mt-8 flex justify-center animate-slideIn">
+                <button
+                  onClick={loadMore}
+                  className="group relative px-8 py-3 bg-gradient-to-r from-green-600 to-emerald-600 text-white rounded-xl font-semibold hover:shadow-lg hover:shadow-green-500/50 transition-all flex items-center space-x-2"
+                >
+                  <span>Load More Projects</span>
+                  <TrendingUp className="w-5 h-5 group-hover:translate-y-1 transition-transform" />
+                </button>
+              </div>
+            )}
+
+            {/* Showing count indicator */}
+            <div className="mt-6 text-center text-slate-400 text-sm">
+              Showing {displayedProjects.length} of {filteredProjects.length} projects
+              {selectedCategory !== "All" && ` in ${selectedCategory}`}
             </div>
           </div>
         </>

@@ -16,6 +16,9 @@ _socketio = None
 _api_mode = False  # Use HTTP API when True, socketio when False
 _api_url = "http://localhost:5001"
 
+# Store current watchlist state (updated via WebSocket from frontend)
+_current_watchlist = []
+
 def set_socketio(socketio_instance):
     """Set the socketio instance to use for emitting events"""
     global _socketio, _api_mode
@@ -29,6 +32,16 @@ def use_api_mode(api_url="http://localhost:5001"):
     _api_mode = True
     _api_url = api_url
     logger.info(f"✅ API mode enabled: {api_url}")
+
+def update_watchlist_state(watchlist_data):
+    """Update the current watchlist state from frontend"""
+    global _current_watchlist
+    _current_watchlist = watchlist_data
+    logger.info(f"📋 Watchlist state updated: {len(watchlist_data)} companies")
+
+def get_current_watchlist():
+    """Get the current watchlist state"""
+    return _current_watchlist
 
 
 def change_theme():
@@ -190,4 +203,37 @@ def go_to_projects_page():
         return True
     except Exception as e:
         logger.error(f"❌ Error navigating to projects page: {str(e)}")
+        return False
+
+
+def go_to_project_page(project_id):
+    """
+    Navigate to a specific project's detail/report page
+    
+    Args:
+        project_id: Project ID or code (e.g., 'VCS191', '3519')
+    """
+    if _api_mode:
+        try:
+            response = requests.post(f"{_api_url}/api/frontend/navigate", 
+                                    json={'action': 'project', 'project_id': project_id})
+            logger.info(f"🧭 Navigating to project page: {project_id}")
+            return response.status_code == 200
+        except Exception as e:
+            logger.error(f"❌ Error navigating to project page: {str(e)}")
+            return False
+    
+    if _socketio is None:
+        logger.error("❌ SocketIO not initialized. Call set_socketio() or use_api_mode() first.")
+        return False
+    
+    try:
+        _socketio.emit('navigate', {
+            'action': 'project',
+            'project_id': project_id
+        })
+        logger.info(f"🧭 Navigating to project page: {project_id}")
+        return True
+    except Exception as e:
+        logger.error(f"❌ Error navigating to project page: {str(e)}")
         return False

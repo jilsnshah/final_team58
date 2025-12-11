@@ -5,9 +5,8 @@ import Dashboard from './pages/Dashboard';
 import ReportPage from './pages/ReportPage';
 import ProjectsPage from './pages/ProjectsPage';
 import * as api from './services/api';
+import { ThemeContext } from './context/ThemeContext';
 import './index.css';
-
-export const ThemeContext = React.createContext();
 
 function AppContent() {
   const [theme, setTheme] = React.useState('dark'); // 'dark' or 'light'
@@ -72,6 +71,11 @@ function AppContent() {
         if (data.action === 'projects') {
           console.log('📍 Navigating to /projects');
           navigate('/projects');
+        } else if (data.action === 'project') {
+          // Navigate to individual project detail page
+          const projectId = data.project_id;
+          console.log(`📍 Navigating to /report/${projectId}`);
+          navigate(`/report/${projectId}`);
         } else if (data.action === 'company') {
           // Use ticker if available, otherwise fall back to company_name
           const urlId = data.ticker || data.company_name;

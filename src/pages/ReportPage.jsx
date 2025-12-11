@@ -35,12 +35,40 @@ const ReportPage = () => {
   // Loading/error state
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState(null);
+  
+  // Progress tracking state
+  const [progressSteps, setProgressSteps] = React.useState([]);
+  const [currentProgress, setCurrentProgress] = React.useState(null);
+
+  // Setup WebSocket listener for progress updates
+  React.useEffect(() => {
+    const socket = api.initWebSocket();
+    
+    api.onDataUpdate('report_progress', (data) => {
+      if (data.id === id) {
+        setCurrentProgress(data.message);
+        if (data.step) {
+          setProgressSteps(prev => {
+            const existing = prev.find(s => s.step === data.step);
+            if (existing) return prev;
+            return [...prev, { step: data.step, message: data.message, timestamp: Date.now() }];
+          });
+        }
+      }
+    });
+    
+    return () => {
+      api.onDataUpdate('report_progress', null);
+    };
+  }, [id]);
 
   // Fetch data from backend
   React.useEffect(() => {
     const fetchData = async () => {
       try {
         setLoading(true);
+        setProgressSteps([]);
+        setCurrentProgress(null);
 
         // Try to fetch as company first
         const companyResult = await api.getCompanyById(id);
@@ -49,9 +77,12 @@ const ReportPage = () => {
 
           // Fetch company insights (Section 2)
           try {
+            setProgressSteps([{ step: 1, message: 'Fetching company insights...', timestamp: Date.now() }]);
+            setCurrentProgress('Fetching company insights...');
             const insightsResult = await api.getCompanyInsights(id);
             if (insightsResult.success) {
               setCompanyInsights(insightsResult.data);
+              setProgressSteps(prev => [...prev, { step: 2, message: 'Company insights loaded', timestamp: Date.now() }]);
             }
           } catch (err) {
             console.log("Company insights not available:", err);
@@ -59,12 +90,17 @@ const ReportPage = () => {
 
           // Fetch future impact (Section 3)
           try {
+            setCurrentProgress('Analyzing future impact...');
+            setProgressSteps(prev => [...prev, { step: 3, message: 'Analyzing sustainability & future impact...', timestamp: Date.now() }]);
             const futureResult = await api.getFutureImpactAnalysis(id);
             if (futureResult.success) {
               setCompanyFutureImpact(futureResult.data);
+              setProgressSteps(prev => [...prev, { step: 4, message: 'Analysis complete', timestamp: Date.now() }]);
+              setCurrentProgress(null);
             }
           } catch (err) {
             console.log("Future impact not available:", err);
+            setCurrentProgress(null);
           }
         } else {
           // Try as project
@@ -74,13 +110,18 @@ const ReportPage = () => {
             
             // Fetch project report (Section 2)
             setReportLoading(true);
+            setProgressSteps([{ step: 1, message: 'Generating comprehensive project report...', timestamp: Date.now() }]);
+            setCurrentProgress('Generating comprehensive project report...');
             try {
               const reportResult = await api.getProjectReport(id);
               if (reportResult.success) {
                 setProjectReport(reportResult.data);
+                setProgressSteps(prev => [...prev, { step: 2, message: 'Report generation complete', timestamp: Date.now() }]);
+                setCurrentProgress(null);
               }
             } catch (err) {
               console.log("Project report not available:", err);
+              setCurrentProgress(null);
             } finally {
               setReportLoading(false);
             }
@@ -279,8 +320,21 @@ const ReportPage = () => {
                   />
                 </div>
               ) : (
-                <div className="flex items-center justify-center py-8">
+                <div className="flex flex-col items-center justify-center py-8">
                   <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-green-500 mx-auto mb-3"></div>
+                  {currentProgress && progressSteps.length > 0 && progressSteps.some(s => s.step <= 2) && (
+                    <div className="text-center mt-4">
+                      <p className="text-green-400 font-medium mb-2">{currentProgress}</p>
+                      <div className="space-y-1 text-sm text-slate-400">
+                        {progressSteps.map((step, idx) => (
+                          <div key={idx} className="flex items-center gap-2 justify-center">
+                            <div className="w-2 h-2 bg-green-500 rounded-full"></div>
+                            <span>{step.message}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -302,8 +356,21 @@ const ReportPage = () => {
                   />
                 </div>
               ) : (
-                <div className="flex items-center justify-center py-8">
+                <div className="flex flex-col items-center justify-center py-8">
                   <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-purple-500 mx-auto mb-3"></div>
+                  {currentProgress && progressSteps.length > 0 && progressSteps.some(s => s.step >= 3) && (
+                    <div className="text-center mt-4">
+                      <p className="text-purple-400 font-medium mb-2">{currentProgress}</p>
+                      <div className="space-y-1 text-sm text-slate-400">
+                        {progressSteps.filter(s => s.step >= 3).map((step, idx) => (
+                          <div key={idx} className="flex items-center gap-2 justify-center">
+                            <div className="w-2 h-2 bg-purple-500 rounded-full"></div>
+                            <span>{step.message}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -406,7 +473,20 @@ const ReportPage = () => {
                 <div className="flex items-center justify-center py-12">
                   <div className="text-center">
                     <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-green-500 mx-auto mb-4"></div>
-                    <p className="text-slate-400">Generating AI report...</p>
+                    <p className="text-slate-400 mb-4">Generating AI report...</p>
+                    {currentProgress && (
+                      <div className="mt-6">
+                        <p className="text-green-400 font-medium mb-3">{currentProgress}</p>
+                        <div className="space-y-2 max-w-md mx-auto">
+                          {progressSteps.map((step, idx) => (
+                            <div key={idx} className="flex items-center gap-3 text-sm">
+                              <div className="w-2 h-2 bg-green-500 rounded-full flex-shrink-0"></div>
+                              <span className="text-slate-300 text-left">{step.message}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </div>
               ) : projectReport ? (

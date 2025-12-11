@@ -438,7 +438,7 @@ def search_news(query: str, k: int = 5) -> List[Dict]:
     """
     service = get_news_rag_service()
     if service:
-        return service.search_news(query, k=k)
+        return service.search_news(query, k=k*10)
     return []
 
 

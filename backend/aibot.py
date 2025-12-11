@@ -17,20 +17,27 @@ from langchain_core.messages import AIMessage, HumanMessage
 import frontend_actions
 from llm_manager import get_llm
 
+# Try to import Tavily for web search
+try:
+    from langchain_tavily import TavilySearch
+    TAVILY_AVAILABLE = True
+except ImportError:
+    TAVILY_AVAILABLE = False
+    print("⚠️ Tavily not available - web search disabled")
+
 # Import RAG and Service modules
 try:
     from services.news_rag_service import search_news
-    from services.projects_rag_service import search_projects
     NEWS_RAG_AVAILABLE = True
-    PROJECTS_RAG_AVAILABLE = True
 except ImportError:
     NEWS_RAG_AVAILABLE = False
-    PROJECTS_RAG_AVAILABLE = False
-    print("⚠️ RAG services not available")
+    print("⚠️ News RAG service not available")
 
 # References to services (set by app.py)
 _company_service = None
 _project_service = None
+_projects_service = None
+_live_news_service = None
 
 def set_company_service(service):
     """Set the company service reference from app.py"""
@@ -43,6 +50,18 @@ def set_project_service(service):
     global _project_service
     _project_service = service
     logger.info("✅ Project service connected to aibot")
+
+def set_projects_service(service):
+    """Set the projects service reference from app.py"""
+    global _projects_service
+    _projects_service = service
+    logger.info("✅ Projects service connected to aibot")
+
+def set_live_news_service(service):
+    """Set the live news service reference from app.py"""
+    global _live_news_service
+    _live_news_service = service
+    logger.info("✅ Live News service connected to aibot")
 
 # Set Google API Key
 os.environ["GOOGLE_API_KEY"] = os.getenv("GOOGLE_API_KEY", "")  # Use env variable or empty if not set
@@ -134,53 +153,6 @@ def change_theme() -> str:
     return "Theme changed successfully!" if success else "Failed to change theme."
 
 @tool
-def get_company_info(company_name: str) -> str:
-    """Get detailed information about a company including stock price, ESG rating, and sustainability initiatives.
-    
-    Args:
-        company_name: Name of the company (e.g., 'Tesla', 'Apple') or ticker (e.g., 'TSLA', 'AAPL')
-    
-    Returns:
-        Detailed company information as a formatted string
-    """
-    if not _pathway_reader:
-        return "Company data is currently unavailable."
-    
-    try:
-        # Resolve company name to ticker
-        name, ticker = resolve_ticker(company_name)
-        finance_data = _pathway_reader.get_finance()
-        
-        # Find the company
-        for company in finance_data:
-            if company.get('ticker', '').upper() == ticker.upper():
-                # Format the company info nicely
-                price = company.get('price') or company.get('stock_price') or 'N/A'
-                change = company.get('change_percent', 0)
-                change_str = f"+{change:.2f}%" if change >= 0 else f"{change:.2f}%"
-                
-                info = f"""
-Company: {company.get('company_name', ticker)}
-Ticker: {company.get('ticker', 'N/A')}
-Industry: {company.get('industry', 'N/A')}
-Stock Price: ${price}
-Change: {change_str}
-Market Cap: {company.get('market_cap') or 'N/A'}
-ESG Rating: {company.get('esg_rating', 'N/A')}
-GII Score: {company.get('gii_score', 'N/A')}/100
-Description: {company.get('description', 'N/A')}
-Sustainability: {company.get('sustainability_update', 'N/A')}
-Website: {company.get('website', 'N/A')}
-"""
-                return info.strip()
-        
-        return f"No information found for {company_name}. The company may not be in our database."
-        
-    except Exception as e:
-        logger.error(f"Error getting company info: {e}")
-        return f"Error retrieving company information: {str(e)}"
-
-@tool
 def list_available_companies() -> str:
     """List all companies available in the database with their tickers.
     
@@ -208,6 +180,39 @@ def list_available_companies() -> str:
         return "Error retrieving company list."
 
 @tool
+def get_watchlist() -> str:
+    """Get the current companies in the user's watchlist.
+    
+    Returns:
+        A formatted list of companies currently in the user's watchlist with their details
+    """
+    try:
+        # Request latest watchlist from frontend
+        frontend_actions.request_watchlist()
+        
+        # Get current watchlist state
+        watchlist = frontend_actions.get_current_watchlist()
+        
+        if not watchlist:
+            return "Your watchlist is currently empty. Add companies using add_to_watchlist tool."
+        
+        output = [f"Your watchlist ({len(watchlist)} companies):\n"]
+        for i, company in enumerate(watchlist, 1):
+            name = company.get('name') or company.get('company_name', 'N/A')
+            ticker = company.get('ticker') or company.get('id', 'N/A')
+            industry = company.get('industry', 'N/A')
+            esg = company.get('esg_rating') or company.get('esg_score', 'N/A')
+            
+            output.append(f"{i}. {name} ({ticker})")
+            output.append(f"   Industry: {industry}")
+            output.append(f"   ESG Rating: {esg}")
+        
+        return "\n".join(output)
+    except Exception as e:
+        logger.error(f"Error getting watchlist: {e}")
+        return "Error retrieving watchlist. Please try again."
+
+@tool
 def add_to_watchlist(company_name: str) -> str:
     """Add a company to the watchlist.
     
@@ -232,22 +237,50 @@ def remove_from_watchlist(company_name: str) -> str:
     return f"Removed {name} ({ticker}) from watchlist!" if success else f"Failed to remove {company_name}."
 
 @tool
-def go_to_company(company_name: str) -> str:
-    """Navigate to a company's detail page.
+def go_to_detail_page(identifier: str, page_type: str = "auto") -> str:
+    """Navigate to a detailed page for a company or carbon project.
     
     Args:
-        company_name: Name of the company (e.g., 'Tesla') or ticker (e.g., 'TSLA')
+        identifier: Company name/ticker (e.g., 'Tesla', 'TSLA') OR project code/ID (e.g., 'VCS191', '3519')
+        page_type: Type of page - 'company', 'project', or 'auto' (default: auto-detect)
+    
+    Returns:
+        Success message or error
     """
-    # Resolve company name to ticker
-    name, ticker = resolve_ticker(company_name)
-    success = frontend_actions.go_to_company_page(name, ticker)
-    return f"Navigating to {name} ({ticker})!" if success else f"Failed to navigate."
+    try:
+        # Auto-detect if not specified
+        if page_type == "auto":
+            # Try to detect if it's a company or project
+            # Companies usually have stock tickers (2-5 uppercase letters) or well-known names
+            # Projects usually have codes like VCS191, VCS-191, or numeric IDs
+            if identifier.upper().startswith('VCS') or identifier.upper().startswith('GS') or identifier.isdigit():
+                page_type = "project"
+            else:
+                page_type = "company"
+        
+        if page_type == "company":
+            # Resolve company name to ticker
+            name, ticker = resolve_ticker(identifier)
+            success = frontend_actions.go_to_company_page(name, ticker)
+            return f"Navigating to {name} ({ticker})!" if success else f"Failed to navigate to company page."
+        
+        elif page_type == "project":
+            # Navigate to project detail page using project ID
+            success = frontend_actions.go_to_project_page(identifier)
+            return f"Navigating to project {identifier}!" if success else f"Failed to navigate to project page."
+        
+        else:
+            return "Invalid page_type. Use 'company', 'project', or 'auto'."
+            
+    except Exception as e:
+        logger.error(f"Error navigating: {e}")
+        return f"Error: {str(e)}"
 
 @tool
 def go_to_projects() -> str:
-    """Navigate to the carbon projects page."""
+    """Navigate to the projects marketplace page (list of all carbon projects)."""
     success = frontend_actions.go_to_projects_page()
-    return "Navigating to projects page!" if success else "Failed to navigate to projects."
+    return "Navigating to Projects marketplace!" if success else "Failed to navigate."
 
 @tool
 def search_carbon_news(query: str, k: int = 5) -> str:
@@ -283,7 +316,7 @@ def search_carbon_news(query: str, k: int = 5) -> str:
 
 @tool
 def search_carbon_projects(query: str, k: int = 5) -> str:
-    """Search carbon credit projects using RAG. Returns projects about renewable energy, REDD+, carbon offsets.
+    """Search carbon credit projects using semantic search. Returns projects about renewable energy, REDD+, carbon offsets.
     
     Args:
         query: Search query (e.g., 'wind energy projects', 'REDD+ Brazil')
@@ -292,34 +325,42 @@ def search_carbon_projects(query: str, k: int = 5) -> str:
     Returns:
         Relevant projects with names, registries, countries, types
     """
-    if not PROJECTS_RAG_AVAILABLE:
-        return "Projects RAG is unavailable."
+    if not _projects_service:
+        return "Projects service is unavailable."
     
     try:
-        results = search_projects(query, k=k)
-        if not results:
+        result = _projects_service.search_projects(query, limit=k)
+        if not result.get('success') or not result.get('data'):
             return "No projects found."
         
+        projects = result['data']
         output = []
-        for i, chunk in enumerate(results, 1):
+        for i, project in enumerate(projects, 1):
             output.append(f"\n--- Project {i} ---")
-            output.append(f"Name: {chunk['name']}")
-            output.append(f"Registry: {chunk['registry']}")
-            output.append(f"Country: {chunk['country']}")
-            output.append(f"Type: {chunk['type']}")
-            output.append(f"Link: {chunk['registry_link']}")
-            output.append(f"Content: {chunk['content'][:300]}...")
+            output.append(f"Name: {project.get('name', project.get('project_name', 'N/A'))}")
+            output.append(f"ID: {project.get('id', project.get('project_id', 'N/A'))}")
+            output.append(f"Registry: {project.get('registry', 'N/A')}")
+            output.append(f"Country: {project.get('country', 'N/A')}")
+            output.append(f"Category: {project.get('category', 'N/A')}")
+            output.append(f"Methodology: {project.get('methodology', 'N/A')}")
+            output.append(f"Price: ${project.get('price', 0)}/credit")
+            output.append(f"Available: {project.get('available_credits', 0)} credits")
+            desc = project.get('description', '')
+            if desc:
+                output.append(f"Description: {desc[:200]}...")
+        
+        output.append(f"\nSearch method: {result.get('method', 'unknown')}")
         return "\n".join(output)
     except Exception as e:
         logger.error(f"Error searching projects: {e}")
         return f"Error: {str(e)}"
 
 @tool
-def get_detailed_company_info(ticker: str) -> str:
+def get_detailed_company_info(company_name: str) -> str:
     """Get comprehensive company details including stock price, ESG rating, GII score, industry, description.
     
     Args:
-        ticker: Company ticker (e.g., 'TSLA', 'AAPL')
+        company_name: Company name or ticker (e.g., 'Tesla', 'TSLA')
     
     Returns:
         Detailed company information
@@ -328,9 +369,11 @@ def get_detailed_company_info(ticker: str) -> str:
         return "Company service unavailable."
     
     try:
+        # Resolve company name to ticker
+        name, ticker = resolve_ticker(company_name)
         result = _company_service.get_company_details(ticker)
         if not result.get('success'):
-            return f"Company {ticker} not found."
+            return f"Company {company_name} not found."
         
         comp = result['data']
         info = f"""
@@ -345,54 +388,6 @@ Description: {comp.get('description', '')}
 Website: {comp.get('website', '')}
 """
         return info.strip()
-    except Exception as e:
-        return f"Error: {str(e)}"
-
-@tool
-def get_company_insights(ticker: str) -> str:
-    """Get AI-powered insights about a company's sustainability, ESG performance, and market position.
-    
-    Args:
-        ticker: Company ticker (e.g., 'TSLA', 'AAPL')
-    
-    Returns:
-        AI-generated insights and analysis
-    """
-    if not _company_service:
-        return "Company service unavailable."
-    
-    try:
-        result = _company_service.get_company_insights(ticker)
-        if not result.get('success'):
-            return f"Insights for {ticker} unavailable."
-        
-        data = result['data']
-        insights = data.get('insights', 'No insights available')
-        return f"Insights for {data.get('company_name')}:\n{insights}"
-    except Exception as e:
-        return f"Error: {str(e)}"
-
-@tool
-def get_company_future_impact(ticker: str) -> str:
-    """Get comprehensive future impact analysis using AI agent with news, projects, and internet search.
-    
-    Args:
-        ticker: Company ticker (e.g., 'TSLA', 'AAPL')
-    
-    Returns:
-        Detailed future impact analysis
-    """
-    if not _company_service:
-        return "Company service unavailable."
-    
-    try:
-        result = _company_service.get_future_impact_analysis(ticker)
-        if not result.get('success'):
-            return f"Future impact analysis for {ticker} unavailable."
-        
-        data = result['data']
-        analysis = data.get('analysis', 'No analysis available')
-        return f"Future Impact for {data.get('company_name')}:\n{analysis}"
     except Exception as e:
         return f"Error: {str(e)}"
 
@@ -430,51 +425,153 @@ Description: {proj.get('description', 'N/A')}
         return f"Error: {str(e)}"
 
 @tool
-def get_project_report(project_id: str) -> str:
-    """Get AI-generated comprehensive report for a carbon project.
+def search_web(query: str) -> str:
+    """Search the internet for current information, news, and data using Tavily.
     
     Args:
-        project_id: Project ID
+        query: Search query (e.g., 'Tesla carbon credits 2024', 'latest ESG trends')
     
     Returns:
-        AI-generated project report
+        Search results with sources and snippets
     """
-    if not _project_service:
-        return "Project service unavailable."
+    if not TAVILY_AVAILABLE:
+        return "Web search is unavailable. Tavily not installed."
     
     try:
-        result = _project_service.generate_project_report(project_id)
-        if not result.get('success'):
-            return f"Report for project {project_id} unavailable."
+        search = TavilySearch(
+            max_results=10
+        )
+        # TavilySearch.invoke returns a string directly
+        results = search.invoke({"query": query})
         
-        data = result['data']
-        report = data.get('report', 'No report available')
-        return f"Project Report for {data.get('project_name')}:\n{report}"
+        if not results:
+            return "No results found."
+        
+        # TavilySearch returns formatted text, not structured data
+        return f"Search results for: {query}\n\n{results}"
     except Exception as e:
-        return f"Error: {str(e)}"
+        logger.error(f"Error searching web: {e}")
+        return f"Search error: {str(e)}"
+
+@tool
+def get_live_news(limit: int = 10, source: str = None) -> str:
+    """Get latest live news articles from the dashboard feed.
+    
+    Args:
+        limit: Maximum number of articles to return (default: 10, max: 50)
+        source: Filter by specific news source (optional)
+    
+    Returns:
+        Formatted list of recent news articles with titles, summaries, and sources
+    """
+    if not _live_news_service:
+        return "Live news service is currently unavailable."
+    
+    try:
+        # Ensure limit is reasonable
+        limit = min(limit, 50)
+        
+        result = _live_news_service.get_live_news(limit=limit, source=source)
+        
+        if not result.get('success'):
+            return f"Error getting news: {result.get('error', 'Unknown error')}"
+        
+        articles = result.get('data', [])
+        
+        if not articles:
+            return "No news articles found."
+        
+        output = [f"Latest {len(articles)} news articles:\n"]
+        for i, article in enumerate(articles, 1):
+            title = article.get('title', 'No title')
+            summary = article.get('summary', 'No summary')[:150]
+            source = article.get('source', 'Unknown')
+            sentiment = article.get('sentiment', 'Neutral')
+            published = article.get('published', 'Unknown date')
+            
+            output.append(f"{i}. **{title}**")
+            output.append(f"   Source: {source} | Sentiment: {sentiment}")
+            output.append(f"   Published: {published}")
+            output.append(f"   {summary}...\n")
+        
+        return "\n".join(output)
+    except Exception as e:
+        logger.error(f"Error getting live news: {e}")
+        return f"Error retrieving news: {str(e)}"
+
+@tool
+def get_news_by_sentiment(sentiment: str = "Positive", limit: int = 10) -> str:
+    """Get news articles filtered by sentiment (Positive, Negative, or Neutral).
+    
+    Args:
+        sentiment: "Positive", "Negative", or "Neutral" (default: Positive)
+        limit: Maximum number of articles to return (default: 10, max: 20)
+    
+    Returns:
+        Formatted list of news articles matching the sentiment filter
+    """
+    if not _live_news_service:
+        return "Live news service is currently unavailable."
+    
+    # Validate sentiment
+    valid_sentiments = ["Positive", "Negative", "Neutral"]
+    if sentiment not in valid_sentiments:
+        return f"Invalid sentiment. Choose from: {', '.join(valid_sentiments)}"
+    
+    try:
+        # Ensure limit is reasonable
+        limit = min(limit, 20)
+        
+        result = _live_news_service.get_news_by_sentiment(sentiment=sentiment, limit=limit)
+        
+        if not result.get('success'):
+            return f"Error filtering news: {result.get('error', 'Unknown error')}"
+        
+        articles = result.get('data', [])
+        
+        if not articles:
+            return f"No {sentiment.lower()} news articles found."
+        
+        output = [f"{sentiment} News ({len(articles)} articles):\n"]
+        for i, article in enumerate(articles, 1):
+            title = article.get('title', 'No title')
+            summary = article.get('summary', 'No summary')[:150]
+            source = article.get('source', 'Unknown')
+            published = article.get('published', 'Unknown date')
+            
+            output.append(f"{i}. **{title}**")
+            output.append(f"   Source: {source}")
+            output.append(f"   Published: {published}")
+            output.append(f"   {summary}...\n")
+        
+        return "\n".join(output)
+    except Exception as e:
+        logger.error(f"Error filtering news by sentiment: {e}")
+        return f"Error retrieving news: {str(e)}"
 
 # List of all tools
 tools = [
     # Navigation & UI
     change_theme, 
-    go_to_company, 
+    go_to_detail_page, 
     go_to_projects,
     # Watchlist
+    get_watchlist,
     add_to_watchlist, 
     remove_from_watchlist,
-    # Basic Info
+    # Company Info
     list_available_companies,
-    get_company_info,
-    # Advanced Company Analysis
     get_detailed_company_info,
-    get_company_insights,
-    get_company_future_impact,
-    # Project Tools
+    # Project Info
     get_project_details,
-    get_project_report,
     # RAG Search
     search_carbon_news,
-    search_carbon_projects
+    search_carbon_projects,
+    # Live News Feed
+    get_live_news,
+    get_news_by_sentiment,
+    # Web Search
+    search_web
 ]
 
 # ============================================================================
@@ -491,35 +588,47 @@ You're an expert guide helping users navigate sustainability investments, ESG an
 
 🛠️ YOUR COMPREHENSIVE CAPABILITIES:
 
-**Company Analysis (Multiple Levels):**
-- get_company_info / get_detailed_company_info - Basic stock, ESG, GII data
-- get_company_insights - AI-powered sustainability insights
-- get_company_future_impact - Comprehensive future impact analysis using multi-tool AI agent
+**Company Analysis:**
+- get_detailed_company_info - Get stock price, ESG rating, GII score, industry, description
 - list_available_companies - See all companies in database
+- **For AI insights & future impact analysis**: Navigate to the company's report page using go_to_detail_page
 
 **Carbon Projects:**
-- get_project_details - Project info (country, methodology, credits, price)
-- get_project_report - AI-generated comprehensive project reports
+- get_project_details - Get basic project info (country, methodology, credits, price)
+- search_carbon_projects - Search and discover carbon offset projects
+- **For AI-generated project reports**: Navigate to the project's detail page using go_to_detail_page with project ID
 
 **RAG-Powered Search (Real Data):**
 - search_carbon_news - Search latest ESG/carbon/sustainability news articles with sources
 - search_carbon_projects - Search carbon offset projects (renewable energy, REDD+, etc.)
 
+**Live News Feed:**
+- get_live_news - Get the latest news articles from the dashboard feed (limit: 1-50, optional source filter)
+- get_news_by_sentiment - Filter news by sentiment (Positive/Negative/Neutral)
+
+**Web Search:**
+- search_web - Search the internet for current information, trends, and real-time data
+
 **Platform Navigation:**
-- go_to_company - Navigate to company detail pages
-- go_to_projects - Go to carbon projects page
+- go_to_detail_page - Navigate to company OR project detail pages (auto-detects type, or specify 'company'/'project')
+- go_to_projects - Go to carbon projects marketplace (list view)
 - change_theme - Toggle light/dark mode
 
 **Watchlist:**
+- get_watchlist - View all companies currently in the user's watchlist
 - add_to_watchlist / remove_from_watchlist - Manage user's company watchlist
 
 💡 HOW TO ASSIST:
 - **Be proactive** - Guide users through the platform and suggest relevant tools
-- **Use tools intelligently** - For company questions, start with basic info, then use insights/future impact for deeper analysis
-- **Search first** - When asked about news/trends/projects, USE search_carbon_news and search_carbon_projects
+- **Use tools intelligently** - For basic company info, use get_detailed_company_info. For deeper insights/reports, navigate to their report page
+- **News intelligence** - Use get_live_news for latest headlines, get_news_by_sentiment for sentiment-filtered news, and search_carbon_news for RAG-powered deep search
+- **Search first** - When asked about news/trends/projects, USE the appropriate news tool (get_live_news for latest, search_carbon_news for specific topics). Use search_carbon_projects for carbon projects. For current events or general topics, use search_web
+- **Navigate for reports** - When users ask for company insights, future impact, or comprehensive reports, navigate to the company's report page using go_to_detail_page
+- **Navigate for project details** - When users ask about specific project details or reports, navigate to the project's detail page using go_to_detail_page with the project ID
+- **Web search when needed** - Use search_web for current events, latest trends, or information not in the database
 - **Be conversational** - Friendly, helpful tone. Explain ESG/carbon concepts simply
 - **Provide context** - Don't just dump tool output - interpret and summarize key points
-- **Offer next steps** - Suggest relevant actions ("Want me to add them to your watchlist?" or "Should I pull up their future impact analysis?")
+- **Offer next steps** - Suggest relevant actions ("Want me to add them to your watchlist?" or "Should I open their detailed report page?")
 
 🎯 RESPONSE GUIDELINES:
 - Keep responses clear and concise (2-4 paragraphs for complex topics)
@@ -527,7 +636,9 @@ You're an expert guide helping users navigate sustainability investments, ESG an
 - When using RAG tools, summarize the key findings naturally
 - Explain technical terms (ESG, GII, carbon credits, REDD+) when needed
 - Minimal emojis (1-2 max per response)
-- when user tells to generate a report on company, navigate to the company page
+- When user asks to see/view a company report, navigate to the company page using go_to_detail_page
+- When user asks to see/view a project report, navigate using go_to_detail_page with the project ID/code (e.g., "VCS-2126", "GS-1234")
+- **IMPORTANT**: Carbon projects use IDs in format like "VCS-2126", "GS-1234" - use these EXACT codes when navigating to project pages
 
 🚫 AVOID:
 - Raw JSON or unformatted tool outputs

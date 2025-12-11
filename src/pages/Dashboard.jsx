@@ -2,7 +2,7 @@ import React from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { Plus, ExternalLink, Trash2, X } from "lucide-react";
 import DashboardChatSidebar from "../components/DashboardChatSidebar";
-import { ThemeContext } from "../App";
+import { ThemeContext } from "../context/ThemeContext";
 import Fuse from "fuse.js";
 import api from "../services/api";
 
@@ -225,10 +225,31 @@ const Dashboard = () => {
           removeWatchlistTimeout = null;
         }, 500);
       });
+
+      // Listen for watchlist requests from backend (AI chatbot)
+      api.onDataUpdate("request_watchlist", () => {
+        console.log("📋 Backend requested watchlist");
+        // Send current watchlist to backend
+        const socket = api.initWebSocket();
+        socket.emit("watchlist_update", { watchlist });
+      });
     } catch (err) {
       console.warn("WebSocket not available:", err);
     }
   }, []);
+
+  // Send watchlist updates to backend whenever it changes
+  React.useEffect(() => {
+    try {
+      const socket = api.initWebSocket();
+      if (socket && socket.connected) {
+        socket.emit("watchlist_update", { watchlist });
+        console.log("📋 Sent watchlist update to backend:", watchlist.length, "companies");
+      }
+    } catch (err) {
+      console.warn("Could not send watchlist update:", err);
+    }
+  }, [watchlist]);
 
   // Set default companies when data loads and watchlist is empty
   React.useEffect(() => {

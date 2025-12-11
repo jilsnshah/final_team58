@@ -93,9 +93,13 @@ class PathwayDataReader:
             
             if cached_mtime is None:
                 self._cache[cache_key]['file_mtime'] = current_mtime
+                return False  # First time checking, no change yet
+            
+            if current_mtime > cached_mtime:
+                self._cache[cache_key]['file_mtime'] = current_mtime
                 return True
             
-            return current_mtime > cached_mtime
+            return False
         except Exception as e:
             logger.error(f"Error checking file modification time: {e}")
             return False
@@ -270,6 +274,10 @@ class PathwayDataReader:
     
     def has_changes(self) -> bool:
         """Check if any data files have been modified since last read"""
+        # If using database, don't rely on file changes (database changes via CDC/Kafka)
+        if self.use_db:
+            return False  # Database updates are handled differently, not file-based
+        
         files_to_check = [
             ('projects', self.projects_file),
             ('finance', self.finance_file),

@@ -1,7 +1,7 @@
 import React from 'react';
 import { Leaf, Search, Sparkles, Sun, Moon } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
-import { ThemeContext } from '../App';
+import { ThemeContext } from '../context/ThemeContext';
 import api from '../services/api';
 
 const Navbar = () => {
