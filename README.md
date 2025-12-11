@@ -2,92 +2,37 @@
 
 A full-stack ESG and carbon market intelligence platform with real-time data scraping, AI-powered insights, RAG-based search, and interactive dashboards.
 
-## 🚀 Quick Start (3 Steps)
-
-### 1. Setup Environment Variables
-
-```bash
-# Copy environment template
-cp backend/.env.example backend/.env
-
-# Edit backend/.env and add your API key:
-# GOOGLE_API_KEY=your_actual_gemini_api_key_here
-```
-
-### 2. Start Backend (Docker)
-
-**Windows:**
-```powershell
-.\start-backend.ps1
-```
-
-**Linux/Mac:**
-```bash
-chmod +x start-backend.sh
-./start-backend.sh
-```
-
-**Or manually:**
-```bash
-cd backend/carbon-intelligence
-docker-compose up -d
-```
-
-This starts ALL backend services in Docker (no local Python needed):
-- ✅ PostgreSQL Database
-- ✅ Flask Backend API (port 5001)
-- ✅ Data Scrapers (Verra, Finance, News)
-- ✅ Pathway gRPC Server
-- ✅ Kafka, Debezium, Redis
-
-### 3. Start Frontend
-
-```bash
-npm install
-npm run dev
-```
-
-**That's it!** Frontend: http://localhost:5173 | Backend: http://localhost:5001
-
----
-
-## 📋 Detailed Setup
+## 🚀 Quick Start
 
 ### Prerequisites
 
-- **Docker & Docker Compose** (required)
-- **Node.js 18+** (for frontend only)
-- **8GB+ RAM** recommended
+- Docker & Docker Compose
+- Node.js 18+ (for frontend development)
+- Python 3.13+ (for backend development)
+- 8GB+ RAM recommended
 
-### One-Command Startup (Docker)
-
-**All backend services run in Docker containers - no local Python installation required!**
+### One-Command Startup
 
 ```bash
-# Windows
-.\start-backend.ps1
+# Start entire backend infrastructure
+docker-compose up -d --build
 
-# Linux/Mac
-./start-backend.sh
-```
-
-What starts automatically:
-- ✅ PostgreSQL Database (port 5432)
-- ✅ Flask Backend API (port 5001)
-- ✅ Kafka & Zookeeper (messaging)
-- ✅ Debezium (change data capture)
-- ✅ Redis (caching)
-- ✅ Pathway gRPC Service (AI vectors)
-- ✅ Data Scrapers (news, finance, carbon projects)
-
-Then start the frontend:
-```bash
+# Start frontend (in a new terminal)
 npm install
 npm run dev
 ```
 
-Frontend: **http://localhost:5173**  
-Backend API: **http://localhost:5001**
+That's it! Everything starts together:
+
+- ✅ PostgreSQL Database (port 5432)
+- ✅ Kafka & Zookeeper (messaging)
+- ✅ Debezium (change data capture)
+- ✅ Redis (caching)
+- ✅ Pathway RAG Service (AI vectors)
+- ✅ Data Scrapers (news, finance, projects)
+- ✅ Flask Backend API (port 5001)
+
+Frontend will be available at: http://localhost:5173
 
 ## 📊 What's Running
 
