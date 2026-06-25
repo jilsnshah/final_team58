@@ -3,7 +3,6 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import psycopg2
-from carbonmark_scraper import run_carbonmark_scraper
 from finance_scraper import run_finance_scraper
 from news_scraper import run_news_scraper
 from verra_scraper import run_verra_scraper

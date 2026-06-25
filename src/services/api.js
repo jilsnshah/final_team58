@@ -4,8 +4,8 @@
 
 import io from "socket.io-client";
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:5000";
-const WS_URL = import.meta.env.VITE_WS_URL || "http://localhost:5000";
+const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:5001";
+const WS_URL = import.meta.env.VITE_WS_URL || "http://localhost:5001";
 
 // WebSocket client singleton
 let socket = null;
@@ -124,11 +124,7 @@ export const onDataUpdate = (type, callback) => {
   socketCallbacks[type] = callback;
 };
 
-// Request specific data via WebSocket
-export const requestData = (type) => {
-  if (!socket) initWebSocket();
-  socket.emit("request_data", { type });
-};
+
 
 // ============================================================================
 // REST API FUNCTIONS
@@ -156,10 +152,7 @@ const apiFetch = async (endpoint, options = {}) => {
   }
 };
 
-// Health Check
-export const healthCheck = async () => {
-  return apiFetch("/health");
-};
+
 
 // ============================================================================
 // PROJECTS API
@@ -202,21 +195,12 @@ export const searchProjects = async (query, limit = 50) => {
 // FINANCE & ESG API
 // ============================================================================
 
-export const getFinance = async (ticker = null) => {
+const getFinance = async (ticker = null) => {
   const url = ticker ? `/api/finance?ticker=${ticker}` : "/api/finance";
   return apiFetch(url);
 };
 
-export const getFinanceByTicker = async (ticker) => {
-  return apiFetch(`/api/finance/${ticker}`);
-};
 
-export const analyzeESG = async (tickers = null) => {
-  return apiFetch("/api/analysis/esg", {
-    method: "POST",
-    body: JSON.stringify({ tickers }),
-  });
-};
 
 // Alias for backward compatibility
 export const getCompanies = async () => {
@@ -260,9 +244,7 @@ export const getNews = async (limit = 350, source = null) => {
   return apiFetch(url);
 };
 
-export const analyzeNewsSentiment = async () => {
-  return apiFetch("/api/analysis/news-sentiment");
-};
+
 
 // ============================================================================
 // ANALYTICS API
@@ -272,77 +254,13 @@ export const getAnalytics = async () => {
   return apiFetch("/api/analytics");
 };
 
-export const analyzeCarbonTrends = async () => {
-  return apiFetch("/api/analysis/carbon-trends");
-};
 
-export const getDashboardSummary = async () => {
-  return getAnalytics();
-};
 
 // ============================================================================
 // LEGACY COMPATIBILITY (for existing frontend code)
 // ============================================================================
 
-export const getFinanceTickers = async () => {
-  const result = await getFinance();
-  return result.data?.map((f) => f.ticker) || [];
-};
 
-export const searchCompanies = async (query) => {
-  const finance = await getFinance();
-  const companies = finance.data || [];
-  return companies.filter(
-    (c) =>
-      c.company_name?.toLowerCase().includes(query.toLowerCase()) ||
-      c.ticker?.toLowerCase().includes(query.toLowerCase())
-  );
-};
-
-export const getESGAnalysis = async () => {
-  return analyzeESG();
-};
-
-export const getTrendsAnalysis = async () => {
-  return analyzeCarbonTrends();
-};
-
-export const getRiskAnalysis = async (projectId = null) => {
-  // Real risk analysis from backend analytics
-  const analytics = await getAnalytics();
-  const projects = analytics.analytics?.projects || {};
-
-  return {
-    success: true,
-    risk_levels: {
-      low: Math.floor(projects.total * 0.3) || 0,
-      medium: Math.floor(projects.total * 0.5) || 0,
-      high: Math.floor(projects.total * 0.2) || 0,
-    },
-  };
-};
-
-export const getRecommendations = async (preferences = {}) => {
-  // Get top projects based on real data
-  const projects = await getProjects(20);
-  return {
-    success: true,
-    recommendations: projects.data || [],
-  };
-};
-
-export const getPortfolioMetrics = async (portfolio = []) => {
-  // Calculate real portfolio metrics
-  const analytics = await getAnalytics();
-  const projects = analytics.analytics?.projects || {};
-
-  return {
-    success: true,
-    total_value: portfolio.length * (projects.avg_price || 10) * 1000,
-    total_credits: portfolio.length * 1000,
-    avg_price: projects.avg_price || 12.5,
-  };
-};
 
 // ============================================================================
 // FRONTEND ACTIONS API
@@ -371,14 +289,7 @@ export const removeFromWatchlist = async (companyName) => {
   });
 };
 
-export const navigateToPage = async (action, companyName = null) => {
-  const payload = { action };
-  if (companyName) payload.company_name = companyName;
-  return apiFetch("/api/frontend/navigate", {
-    method: "POST",
-    body: JSON.stringify(payload),
-  });
-};
+
 
 // ============================================================================
 // AI CHAT API
@@ -410,10 +321,8 @@ export default {
   // WebSocket
   initWebSocket,
   onDataUpdate,
-  requestData,
 
-  // Health
-  healthCheck,
+
 
   // Projects
   getProjects,
@@ -424,37 +333,23 @@ export default {
 
   // Finance & ESG
   getFinance,
-  getFinanceByTicker,
   getCompanies,
   getCompanyById,
   getCompanyInsights,
   getFutureImpactAnalysis,
   askCompanyQuestion,
-  getFinanceTickers,
-  analyzeESG,
-  searchCompanies,
 
   // News
   getNews,
-  analyzeNewsSentiment,
 
   // Analytics
   getAnalytics,
-  analyzeCarbonTrends,
-  getDashboardSummary,
 
-  // Analysis (Legacy)
-  getESGAnalysis,
-  getTrendsAnalysis,
-  getRiskAnalysis,
-  getRecommendations,
-  getPortfolioMetrics,
 
   // Frontend Actions
   changeTheme,
   addToWatchlist,
   removeFromWatchlist,
-  navigateToPage,
 
   // AI Chat
   sendChatMessage,

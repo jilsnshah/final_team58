@@ -6,7 +6,6 @@ from datetime import datetime
 
 import psycopg2
 import requests
-from bs4 import BeautifulSoup
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 

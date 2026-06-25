@@ -16,7 +16,7 @@ import markdown
 try:
     from langchain.agents import create_agent
     from langchain.agents.middleware import before_agent
-    from langchain_core.messages import HumanMessage, AIMessage
+    from langchain_core.messages import HumanMessage
     from langgraph.checkpoint.memory import MemorySaver
     LANGCHAIN_AVAILABLE = True
 except ImportError:

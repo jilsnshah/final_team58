@@ -1,5 +1,4 @@
 import pathway as pw
-from schemas import CarbonmarkSchema, FinanceSchema, NewsSchema, VerraSchema
 
 KAFKA_SERVERS = "kafka:9092"
 

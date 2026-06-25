@@ -561,7 +561,7 @@ const Dashboard = () => {
                 theme === "dark" ? "text-slate-400" : "text-gray-600"
               }`}
             >
-              Make sure the backend server is running on port 5000.
+              Make sure the backend server is running on port 5001.
             </p>
             <button
               onClick={() => window.location.reload()}

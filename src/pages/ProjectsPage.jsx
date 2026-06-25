@@ -179,7 +179,7 @@ const ProjectsPage = () => {
             </h2>
             <p className="text-slate-300">{error}</p>
             <p className="mt-4 text-sm text-slate-400">
-              Make sure the backend server is running on port 5000.
+              Make sure the backend server is running on port 5001.
             </p>
             <button
               onClick={() => window.location.reload()}

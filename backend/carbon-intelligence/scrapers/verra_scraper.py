@@ -5,7 +5,6 @@ import time
 
 import psycopg2
 import requests
-from bs4 import BeautifulSoup
 
 # Category mapping from project type
 CATEGORY_MAP = {
