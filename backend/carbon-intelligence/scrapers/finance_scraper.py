@@ -194,28 +194,16 @@ def fetch_stock_data(ticker):
     print(f"❌ {ticker}: All APIs failed")
     return None
 
-def store_finance_data(cursor, ticker, price_data, esg_data=None):
-    """Store finance data in database"""
-    info = COMPANY_INFO.get(ticker, {})
+def store_finance_data_batch(cursor, finance_records):
+    """Store multiple finance records using execute_values"""
+    from psycopg2.extras import execute_values
     
-    # Calculate GII score (simple formula based on change %)
-    change_pct = price_data['change_percent']
-    gii_score = max(0, min(100, 50 + change_pct * 2))  # Scale to 0-100
-    
-    # Use real ESG rating from API or fallback to default
-    if esg_data and esg_data.get('esg_rating'):
-        esg_rating = esg_data['esg_rating']
-        print(f"   📊 ESG: {esg_rating} (Score: {esg_data.get('esg_score', 'N/A')})")
-    else:
-        esg_rating = 'B'  # Default rating if ESG data unavailable
-        print(f"   ⚠️  ESG: Using default rating (API data unavailable)")
-    
-    cursor.execute("""
+    insert_query = """
         INSERT INTO finance (
             ticker, company_name, price, stock_price, change_percent,
             industry, description, gii_score, sustainability_update,
             esg_rating, website, market_cap
-        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ) VALUES %s
         ON CONFLICT (ticker) DO UPDATE SET
             price = EXCLUDED.price,
             stock_price = EXCLUDED.stock_price,
@@ -224,20 +212,9 @@ def store_finance_data(cursor, ticker, price_data, esg_data=None):
             esg_rating = EXCLUDED.esg_rating,
             market_cap = EXCLUDED.market_cap,
             updated_at = CURRENT_TIMESTAMP
-    """, (
-        ticker,
-        info.get('name', ticker),
-        price_data['price'],
-        price_data['price'],  # Populate stock_price with the same value
-        price_data['change_percent'],
-        info.get('industry', 'Technology'),
-        info.get('description', f'{ticker} company'),
-        gii_score,
-        f"Recent sustainability initiatives for {ticker}",
-        esg_rating,
-        info.get('website', f'https://www.{ticker.lower()}.com'),
-        info.get('market_cap', 'N/A')
-    ))
+    """
+    
+    execute_values(cursor, insert_query, finance_records, page_size=100)
 
 def run_finance_scraper(conn=None, tickers=None):
     """Main scraper function - called by main.py"""
@@ -265,37 +242,55 @@ def run_finance_scraper(conn=None, tickers=None):
     print("=" * 60)
     
     cursor = conn.cursor()
-    successful = 0
-    failed = 0
     
-    for idx, ticker in enumerate(tickers, 1):
-        print(f"\n[{idx}/{len(tickers)}] {ticker}")
-        
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    
+    def process_ticker(ticker):
         try:
-            # Fetch price data
+            print(f"🔍 Fetching {ticker}...")
             price_data = fetch_stock_data(ticker)
-            
             if price_data:
-                # Fetch ESG data
                 esg_data = fetch_esg_from_yahoo(ticker)
                 
-                # Store combined data
-                store_finance_data(cursor, ticker, price_data, esg_data)
-                conn.commit()
-                successful += 1
-            else:
-                failed += 1
+                info = COMPANY_INFO.get(ticker, {})
+                change_pct = price_data['change_percent']
+                gii_score = max(0, min(100, 50 + change_pct * 2))
+                
+                esg_rating = esg_data['esg_rating'] if esg_data and esg_data.get('esg_rating') else 'B'
+                if not esg_data or not esg_data.get('esg_rating'):
+                    print(f"   ⚠️  ESG [{ticker}]: Using default rating")
+                
+                return (
+                    ticker, info.get('name', ticker), price_data['price'], price_data['price'],
+                    change_pct, info.get('industry', 'Technology'), info.get('description', f'{ticker} company'),
+                    gii_score, f"Recent sustainability initiatives for {ticker}", esg_rating,
+                    info.get('website', f'https://www.{ticker.lower()}.com'), info.get('market_cap', 'N/A')
+                )
         except Exception as e:
-            print(f"❌ Error storing {ticker}: {e}")
-            conn.rollback()  # Rollback transaction on error
-            failed += 1
-        
-        # Rate limiting between tickers
-        if idx < len(tickers):
-            delay = random.uniform(5, 10)
-            print(f"⏳ Wait {delay:.1f}s before next ticker...")
-            time.sleep(delay)
+            print(f"❌ Error processing {ticker}: {e}")
+        return None
+
+    records = []
+    print("📰 Fetching latest finance data in PARALLEL...")
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        future_to_ticker = {executor.submit(process_ticker, t): t for t in tickers}
+        for future in as_completed(future_to_ticker):
+            result = future.result()
+            if result:
+                records.append(result)
     
+    successful = len(records)
+    failed = len(tickers) - successful
+    
+    if records:
+        try:
+            store_finance_data_batch(cursor, records)
+            conn.commit()
+            print(f"✅ Successfully batch-upserted {len(records)} finance records.")
+        except Exception as e:
+            print(f"❌ Batch insert failed: {e}")
+            conn.rollback()
+
     cursor.close()
     if own_conn:
         conn.close()

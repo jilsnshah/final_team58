@@ -6,3 +6,4 @@ beautifulsoup4==4.12.2
 python-dotenv
 langchain-google-genai
 langchain-core
+python-dateutil
